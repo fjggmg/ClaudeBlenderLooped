@@ -29,8 +29,9 @@ and keep working until it is genuinely excellent — not just until something ex
     statues, busts, creatures, plants, furniture, food, ornaments) — text->3D, NO image needed:
     `python -m blendahbot.gen3d "a weathered wooden barrel" --out assets/barrel.glb`
     (optionally add `--image <clean-isolated-object.png>` to match a specific reference; a busy
-    scene photo yields a cluttered mesh). Then import via the `gen3d-import-and-place` skill
-    (scale to real size, drop to floor, check materials). PREFER generation for organic/detailed
+    scene photo yields a cluttered mesh). Returns a TEXTURED GLB (baked 2048² PBR) by default —
+    import via the `gen3d-import-and-place` skill (scale to real size, drop to floor) and use its
+    material as-is; only `--no-texture` needs a PolyHaven PBR. PREFER generation for organic/detailed
     props over hand-modelling; hand-model or kitbash hard-surface (vehicles, buildings, panels);
     download CC0 when the asset already exists. PROMPT it like a product photo of ONE object,
     material-first and SHORT (~60 chars — it truncates), no scenes/negatives: "weathered oak

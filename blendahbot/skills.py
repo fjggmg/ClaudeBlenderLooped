@@ -317,8 +317,10 @@ CC0, download via `blendahbot.assets`. Image->3D from a downloaded reference pho
    `python -m blendahbot.gen3d "wooden barrel" --image reference/barrel.png --out assets/barrel.glb`
    (prints the GLB path to stdout; needs the local Hunyuan3D server on :8081, or TRIPO_API_KEY).
 3. Import + place with the snippet below.
-4. If it imported geometry-only (no materials), UV-unwrap and apply a PolyHaven PBR set
-   (see pbr-material-from-polyhaven), then light and frame as usual.
+4. gen3d returns a BAKED-TEXTURE GLB by default (2048² PBR painted onto the mesh) — the glTF
+   import builds the material automatically, so just light and frame it. ONLY if you passed
+   --no-texture (a fast grey blockout) do you UV-unwrap and apply a PolyHaven PBR set
+   (see pbr-material-from-polyhaven).
 
 ## Prompting (text->3D) — this dominates quality
 The text prompt drives an internal text->image step, so write it like a clean product photo of
@@ -370,7 +372,8 @@ def import_and_place(glb_path, target_size=1.0, floor_z=0.0, name=None):
   isolated object on a plain background (crop first if needed), or use text->3D.
 - Generated meshes import at ARBITRARY scale — always normalize to a real size (a barrel ~0.9 m,
   not 40 m) and DROP TO FLOOR, or it floats / dwarfs the scene.
-- glTF auto-builds a Principled BSDF from PBR maps; if has_mats is False, apply a PolyHaven PBR set.
+- Default output is TEXTURED (has_mats True); glTF auto-builds the Principled BSDF — use as-is.
+  Only --no-texture output is bare (has_mats False) -> apply a PolyHaven PBR set.
 - Vary instances (different --seed / --image) so multiple props aren't identical (see varied-instances).
 - Generation replaces MODELLING, not the rest — still ground, scale, light, and frame it.
 

@@ -111,8 +111,10 @@ Tune with `--refs N` or turn it off with `--no-refs`.
 
 ### 3D-asset generation (local, on your GPU)
 
-For organic / detail-dense props the bot can **generate a mesh from a text prompt** instead of
-hand-modelling (its weak spot), via a local Hunyuan3D-2 server on your GPU — free and offline:
+For organic / detail-dense props the bot can **generate a fully textured mesh from a text
+prompt** instead of hand-modelling (its weak spot), via a local Hunyuan3D-2 server on your GPU —
+free and offline. With texture enabled (below) the GLB ships a baked 2048² PBR map, so the bot
+imports it ready-to-use (no PolyHaven material needed):
 
 ```powershell
 python -m blendahbot.gen3d "a weathered wooden barrel" --out assets/barrel.glb
@@ -134,6 +136,33 @@ short path like `C:\AI\Hunyuan3D2_WinPortable`, then (the scripts live in `WinSc
    and add `self.pipe.enable_model_cpu_offload()` after the pipe loads (runs it on the GPU and
    fixes a cuda-generator/cpu-pipe crash).
 4. **Run** — `5-start-api-server.bat` (serves on `:8081`). Keep it running while the bot builds.
+
+**Textured output (heavier one-time setup, worth it).** Geometry-only is the default; to get the
+native paint model (baked PBR, the `--enable_tex` server) you must compile three CUDA/C++
+extensions. On Windows + Blackwell (RTX 50-series) that needs:
+
+1. **VS Build Tools 2022** with the C++ workload (`Microsoft.VisualStudio.2022.BuildTools`,
+   `--add Microsoft.VisualStudio.Workload.VCTools`) — provides `cl.exe`.
+2. **CUDA Toolkit 12.9** to match the portable's `torch …+cu129` (the major version must match).
+   Install the **toolkit components only, NOT the bundled driver** (it ships 576.57; a 50-series
+   card needs its newer driver). The math libraries are required too —
+   `cublas/cublas_dev/cusparse/cusparse_dev/cusolver/cusolver_dev/curand/curand_dev/cufft/cufft_dev`
+   — or `custom_rasterizer` fails with `Cannot open include file: 'cusparse.h'`.
+3. **Compile** in a VS+CUDA env (`vcvarsall x64`, `CUDA_PATH`→v12.9 on `PATH` first,
+   `TORCH_CUDA_ARCH_LIST=12.0`, `DISTUTILS_USE_SDK=1`): `pip install` the `diso`,
+   `custom_rasterizer`, and `differentiable_renderer` source dirs (the portable's
+   `1-compile-install-texture-gen.bat` does this once the env is set).
+4. **Two source patches** the portable ships broken:
+   - `api_server.py` never enabled offload, so the delight + multiview pipelines ran on **CPU**
+     (50 fp16 SD steps ≈ a 10-minute stall). Add
+     `self.pipeline_tex.enable_model_cpu_offload(device=device)` right after the
+     `Hunyuan3DPaintPipeline.from_pretrained(...)` line.
+   - Don't launch via `6-start-api-server-with-texture.bat` — its first-run block reinstalls
+     `huggingface-hub` to ≥1.0 and breaks `transformers`. Start the server directly with
+     `--enable_tex` (touch `python_standalone\Scripts\.hf-reinstalled` to neuter that block), or
+     keep the pinned `huggingface-hub<1.0`.
+
+   With this, `gen3d` (without `--no-texture`) returns a textured GLB in ~20–60 s.
 
 ### Live steering (any launch method)
 
