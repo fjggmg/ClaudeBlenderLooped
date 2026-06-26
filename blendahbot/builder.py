@@ -57,6 +57,7 @@ class Verdict:
     suggestions: list[str] = field(default_factory=list)
     raw: str = ""
     parse_failed: bool = False
+    cost_usd: float = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -216,9 +217,18 @@ def _brief_result(content) -> str:
 # The independent critic
 # --------------------------------------------------------------------------
 
-def _critic_prompt(request: str, image_paths: list[Path], scene_digest: str) -> str:
+def _critic_prompt(
+    request: str, image_paths: list[Path], scene_digest: str, reference_paths: list[Path] | None = None
+) -> str:
     images = "\n".join(f"  - {p}" for p in image_paths) or "  (no render available)"
     digest = scene_digest.strip() or "(scene summary unavailable)"
+    refs = ""
+    if reference_paths:
+        ref_list = "\n".join(f"  - {p}" for p in reference_paths)
+        refs = (
+            "\nReference photos of the intended subject (approximate real-world examples — "
+            "Read these too and compare the render against them):\n" + ref_list + "\n"
+        )
     return f"""\
 Original request:
 
@@ -229,7 +239,7 @@ Scene summary:
 
 Render(s) to review (use the Read tool to open and look at each image file):
 {images}
-
+{refs}
 Now evaluate and reply with the strict JSON verdict described in your instructions.
 """
 
@@ -243,11 +253,13 @@ async def run_critic(
     console: Console,
     transcript: Transcript,
     stderr_cb,
+    reference_paths: list[Path] | None = None,
 ) -> Verdict:
     options = build_critic_options(config, work_dir, stderr_cb)
-    prompt = _critic_prompt(request, image_paths, scene_digest)
+    prompt = _critic_prompt(request, image_paths, scene_digest, reference_paths)
     chunks: list[str] = []
     err = ""
+    cost = 0.0
     try:
         async for message in query(prompt=prompt, options=options):
             transcript.write("critic", message)
@@ -260,6 +272,8 @@ async def run_critic(
                             "critic:" + _short_tool(block.name),
                             _brief_input(block.name, block.input),
                         )
+            elif isinstance(message, ResultMessage):
+                cost += message.total_cost_usd or 0.0
     except Exception as ex:  # noqa: BLE001 - classified below, not swallowed blindly
         err = str(ex)
     text = "\n".join(chunks)
@@ -272,8 +286,11 @@ async def run_critic(
             summary=f"The reviewer could not be reached: {err}",
             parse_failed=True,
             raw=err,
+            cost_usd=cost,
         )
-    return parse_verdict(text)
+    verdict = parse_verdict(text)
+    verdict.cost_usd = cost
+    return verdict
 
 
 async def run_selftest(config: BotConfig, stderr_cb) -> tuple[bool, str]:

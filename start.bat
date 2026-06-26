@@ -24,34 +24,44 @@ if errorlevel 1 (
     "%PY%" -m pip install -e .
 )
 
-REM --- Auth mode: start.bat auth -> one-time subscription login -------------
-if /i "%~1"=="auth" (
-    "%PY%" -m blendahbot --auth
-    goto :end
-)
+REM --- Shortcut modes: start.bat auth | settings | "a red car" --budget 5 ---
+if /i "%~1"=="auth"     ( "%PY%" -m blendahbot --auth     & goto :end )
+if /i "%~1"=="settings" ( "%PY%" -m blendahbot --settings & goto :end )
+if not "%~1"=="" ( "%PY%" -m blendahbot %* & goto :end )
 
-REM --- Pass-through mode: start.bat "a red car" --budget 5 ------------------
-if not "%~1"=="" (
-    "%PY%" -m blendahbot %*
-    goto :end
-)
-
-REM --- Interactive mode: ask for the request, then run ---------------------
+REM --- Interactive menu ----------------------------------------------------
+:menu
 echo.
 echo ===================== blendahbot =====================
-echo  Describe what to build. While it works you can type
-echo  MORE instructions any time and press Enter to steer
-echo  the agent. Type  /stop  to finish early.
+echo   [1] Build something
+echo   [2] Settings  (API key, budget, model, quality...)
+echo   [3] Log in    (Claude subscription)
+echo   [Q] Quit
 echo ======================================================
+set "CHOICE="
+set /p "CHOICE=Choose: "
+if /i "%CHOICE%"=="1" goto :build
+if /i "%CHOICE%"=="2" goto :settings
+if /i "%CHOICE%"=="3" goto :doauth
+if /i "%CHOICE%"=="q" goto :end
+goto :menu
+
+:settings
+"%PY%" -m blendahbot --settings
+goto :menu
+
+:doauth
+"%PY%" -m blendahbot --auth
+goto :menu
+
+:build
+echo.
+echo Describe what to build. While it works you can type MORE instructions
+echo any time and press Enter to steer the agent. Type  /stop  to finish early.
 echo.
 set "REQUEST="
 set /p "REQUEST=What should blendahbot build? "
-
-if "%REQUEST%"=="" (
-    echo No request entered. Exiting.
-    goto :end
-)
-
+if "%REQUEST%"=="" goto :menu
 echo.
 "%PY%" -m blendahbot "%REQUEST%"
 

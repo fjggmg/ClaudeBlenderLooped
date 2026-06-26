@@ -10,6 +10,7 @@ from .auth import auth_env
 from .config import BotConfig
 from .discovery import find_blender_mcp_command, find_claude_cli
 from .prompts import builder_system_prompt, critic_system_prompt
+from .skills import skills_dir
 from .tools import DONE_TOOL, NOTE_TOOL
 
 # Built-in tools the builder is allowed to use without prompting.
@@ -56,7 +57,7 @@ def build_builder_options(
     ]
 
     return ClaudeAgentOptions(
-        system_prompt=builder_system_prompt(render_dir),
+        system_prompt=builder_system_prompt(render_dir, str(skills_dir())),
         mcp_servers={
             "blender": _blender_server(config),
             "bb": tools_server,

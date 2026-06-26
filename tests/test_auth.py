@@ -67,6 +67,14 @@ class TokenFileTests(unittest.TestCase):
         self.assertEqual(auth.load_into_env(), tok)
         self.assertEqual(os.environ.get(auth.TOKEN_ENV), tok)
 
+    def test_api_key_suppresses_oauth_token(self):
+        auth.save_token("sk-ant-oat01-" + "G" * 100)
+        os.environ["ANTHROPIC_API_KEY"] = "sk-ant-api03-xyz"
+        try:
+            self.assertEqual(auth.auth_env(), {})  # API key wins; no token injected
+        finally:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
 
 if __name__ == "__main__":
     unittest.main()

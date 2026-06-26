@@ -35,8 +35,12 @@ class BotConfigTests(unittest.TestCase):
 
     def test_from_env_ignores_none_overrides(self):
         cfg = BotConfig.from_env("thing", max_rounds=None, budget_usd=2.5)
-        self.assertEqual(cfg.max_rounds, 6)
+        self.assertIsNone(cfg.max_rounds)  # default is now unlimited
         self.assertEqual(cfg.budget_usd, 2.5)
+
+    def test_explicit_round_cap_kept(self):
+        cfg = BotConfig.from_env("thing", max_rounds=4)
+        self.assertEqual(cfg.max_rounds, 4)
 
     def test_from_env_reads_environment(self):
         os.environ["BLENDER_MCP_PORT"] = "9999"

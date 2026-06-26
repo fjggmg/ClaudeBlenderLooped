@@ -29,9 +29,11 @@ class BotConfig:
     # Where run artifacts (renders, the .blend, the report) are written.
     out_root: Path = Path("runs")
 
-    # Loop bounds.
-    max_rounds: int = 6
-    max_turns_per_round: int = 80
+    # Loop bounds. max_rounds None = keep going until the reviewer is satisfied
+    # (or the score plateaus for `patience` rounds, or the budget runs out).
+    max_rounds: int | None = None
+    patience: int = 3
+    max_turns_per_round: int = 150
     budget_usd: float | None = None
 
     # Quality gate.
@@ -48,6 +50,9 @@ class BotConfig:
     blender_port: int = 9876
     blender_mcp_cmd: list[str] | None = None
     require_blender: bool = True
+
+    # Reference images downloaded up front to ground the build (0 disables).
+    refs: int = 6
 
     # Interaction.
     steer: bool = True

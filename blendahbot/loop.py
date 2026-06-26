@@ -19,9 +19,15 @@ from .discovery import DiscoveryError, find_blender_mcp_command, find_claude_cli
 from .errors import AUTH_REMEDIATION, AuthError
 from .options import build_builder_options
 from .prompts import first_round_prompt, revision_prompt
+from .refs import fetch_references
+from .skills import ensure_seed_skills
 from .steering import Steering
 from .tools import CompletionState, make_tools_server
 from .ui import Console
+
+# Absolute backstop so an unsatisfiable goal can't loop forever even with no
+# budget set. Normal stops are: satisfied, plateaued, budget, or user /stop.
+_HARD_ROUND_CAP = 60
 
 
 @dataclass
@@ -132,18 +138,52 @@ async def build(config: BotConfig, console: Console) -> RunResult:
         if steering.enabled:
             console.info("💬 Steering on: type instructions any time + Enter to redirect. '/stop' to finish early.")
 
-        for n in range(1, config.max_rounds + 1):
-            console.rule(f"round {n} / {config.max_rounds}")
+        # Seed the modelling skills library (idempotent) so the builder can consult it.
+        ensure_seed_skills()
+
+        # Ground the build in real reference photos before round 1.
+        reference_dir = config.run_dir / "reference"
+        reference_paths: list[Path] = []
+        if config.refs > 0:
+            console.info(f"gathering up to {config.refs} reference image(s)…")
+            reference_paths = await asyncio.to_thread(
+                fetch_references, config.request, reference_dir, config.refs
+            )
+            if reference_paths:
+                console.success(f"got {len(reference_paths)} reference image(s) → {reference_dir}")
+            else:
+                console.warn("no references fetched; the builder will research on its own.")
+        ref_dir_str = str(reference_dir).replace("\\", "/")
+        ref_path_strs = [str(p).replace("\\", "/") for p in reference_paths]
+
+        best_score = -1
+        best_render: Path | None = None
+        stale_rounds = 0
+        n = 0
+        cap_label = str(config.max_rounds) if config.max_rounds else "∞"
+        while True:
+            n += 1
+            if config.max_rounds is not None and n > config.max_rounds:
+                outcome = f"reached the {config.max_rounds}-round limit"
+                break
+            if n > _HARD_ROUND_CAP:
+                outcome = f"stopped at the {_HARD_ROUND_CAP}-round safety cap"
+                console.warn(outcome)
+                break
+
+            console.rule(f"round {n} / {cap_label}")
             round_dir = config.round_dir(n)
             round_dir.mkdir(parents=True, exist_ok=True)
             render_path = round_dir / "render.png"
             state.reset()
 
             if n == 1 or last_verdict is None:
-                prompt = first_round_prompt(config.request, str(render_path).replace("\\", "/"))
+                prompt = first_round_prompt(
+                    config.request, str(render_path).replace("\\", "/"), ref_dir_str, ref_path_strs
+                )
             else:
                 prompt = revision_prompt(
-                    config.request, str(render_path).replace("\\", "/"), last_verdict
+                    config.request, str(render_path).replace("\\", "/"), last_verdict, ref_dir_str
                 )
 
             # Fold in anything typed between rounds.
@@ -160,7 +200,8 @@ async def build(config: BotConfig, console: Console) -> RunResult:
             if result.user_stopped or steering.stop_requested:
                 console.warn("stopping at your request.")
                 images = _gather_images(blender, state, render_path, round_dir, console)
-                final_render = images[0] if images else None
+                if images:
+                    best_render = images[0]
                 outcome = "stopped by user"
                 break
 
@@ -184,9 +225,11 @@ async def build(config: BotConfig, console: Console) -> RunResult:
             else:
                 digest = _safe_digest(blender)
                 verdict = await _judge(
-                    config, images, digest, round_dir, state, console, transcript, stderr_cb
+                    config, images, digest, round_dir, state, console, transcript,
+                    stderr_cb, reference_paths,
                 )
             last_verdict = verdict
+            total_cost += verdict.cost_usd  # the critic costs money too
 
             render_str = str(images[0].resolve()) if images else None
             record = {
@@ -204,21 +247,43 @@ async def build(config: BotConfig, console: Console) -> RunResult:
             )
             _report_verdict(verdict, console)
 
+            # Keep the best result so we return it even if a later round regresses.
+            if verdict.score > best_score:
+                best_score = verdict.score
+                if images:
+                    best_render = images[0]
+                stale_rounds = 0
+            else:
+                stale_rounds += 1
+
             if verdict.satisfied and verdict.score >= config.score_threshold:
                 satisfied = True
-                final_render = images[0] if images else None
                 outcome = "satisfied the request"
+                if images:
+                    best_render = images[0]
                 break
 
             if stop == "budget":
                 outcome = "stopped: budget reached"
-                final_render = images[0] if images else None
                 break
-        else:
-            for r in reversed(rounds):
-                if r.get("render"):
-                    final_render = Path(r["render"])
-                    break
+
+            # Plateau = "done improving". This is the main bound when no round cap
+            # is set; disable with --patience 0 (then only satisfied/budget/stop end it).
+            if config.patience and stale_rounds >= config.patience:
+                outcome = (
+                    f"stopped: quality plateaued at {best_score}/100 after "
+                    f"{config.patience} rounds with no improvement"
+                )
+                console.warn(outcome)
+                break
+
+            # Real cumulative budget ceiling (the SDK's per-round cap isn't enough).
+            if config.budget_usd and total_cost >= config.budget_usd:
+                outcome = f"stopped: budget reached (spent ${total_cost:.2f} of ${config.budget_usd:.2f})"
+                console.warn(outcome)
+                break
+
+        final_render = best_render
     finally:
         if client is not None:
             try:
@@ -339,6 +404,7 @@ async def _judge(
     console: Console,
     transcript: Transcript,
     stderr_cb,
+    reference_paths: list[Path] | None = None,
 ) -> Verdict:
     if not config.use_critic:
         # Trust the builder's own declaration — but only with a render to show.
@@ -365,7 +431,8 @@ async def _judge(
         )
     console.info("handing the render to an independent reviewer…")
     return await run_critic(
-        config, config.request, images, digest, round_dir, console, transcript, stderr_cb
+        config, config.request, images, digest, round_dir, console, transcript,
+        stderr_cb, reference_paths,
     )
 
 

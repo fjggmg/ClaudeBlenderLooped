@@ -100,6 +100,8 @@ def load_into_env() -> str | None:
 
 def auth_env() -> dict[str, str]:
     """The env mapping to pass to ClaudeAgentOptions so the child CLI authenticates."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return {}  # an explicit API key wins; don't also inject the OAuth token
     tok = os.environ.get(TOKEN_ENV) or load_saved_token()
     return {TOKEN_ENV: tok} if tok else {}
 

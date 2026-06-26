@@ -63,16 +63,51 @@ python -m venv .venv
 
 ### Easiest: `start.bat`
 
-Double-click **`start.bat`** (or run it from a terminal). On first run it creates the
-venv and installs itself, then asks what to build. **While it works, you can type more
-instructions at any time and press Enter to steer the agent** — e.g. _"make the roof
-red"_, _"the proportions are off, make it taller"_. Type **`/stop`** to wrap up early.
+Double-click **`start.bat`** (or run it from a terminal). It shows a menu:
 
-You can also pass the request (and flags) straight through:
+```
+[1] Build something
+[2] Settings  (API key, budget, model, quality...)
+[3] Log in    (Claude subscription)
+[Q] Quit
+```
+
+**Build** asks what to make and runs it. **Settings** opens an editor for your saved
+defaults (below). **Log in** does the one-time subscription approve. While a build runs,
+type more instructions any time and press Enter to steer; type **`/stop`** to finish early.
+
+Shortcuts skip the menu: `start.bat settings`, `start.bat auth`, or pass a request and
+flags straight through:
 
 ```powershell
 start.bat "a red sports car on a turntable" --budget 5
 ```
+
+### Settings (saved defaults)
+
+Run **Settings** from the menu (or `blendahbot --settings`) to set, once, things you'd
+otherwise pass as flags every time — saved to `~/.blendahbot/settings.json`:
+
+- **Anthropic API key** — switch to pay-per-token API auth instead of your subscription
+  (leave blank to keep using the subscription login).
+- **Budget per build (USD)**, **model**, **quality threshold**, **max rounds**,
+  **patience**, **reference count**, and toggles for the **critic** and **steering**.
+
+CLI flags still override saved settings for a single run.
+
+### Reference images
+
+To stop the agent building from a vague mental image (the #1 cause of bad output), each
+run first downloads real reference photos of your subject (key-free, via Wikimedia
+Commons + Openverse) into `runs\<…>\reference\`. The builder is required to **look at
+them and match the real proportions, materials and colours**, and the critic **compares
+your render against them**. The agent can also pull more itself mid-build:
+
+```powershell
+python -m blendahbot.refs "wooden cabin forest" --out reference -n 6
+```
+
+Tune with `--refs N` or turn it off with `--no-refs`.
 
 ### Live steering (any launch method)
 
@@ -105,13 +140,16 @@ Then build:
 
 | Flag | Meaning | Default |
 |------|---------|---------|
-| `--max-rounds N` | Max build → critique → revise rounds | 6 |
+| `--max-rounds N` | Hard cap on rounds | unlimited (runs until done) |
+| `--patience N` | Stop after N rounds with no score gain (0 = never) | 3 |
 | `--max-turns N` | Max agent turns per round | 80 |
 | `--budget USD` | Hard spend cap for the whole build | none |
 | `--threshold N` | Critic score (0–100) needed to finish | 80 |
 | `--model ID` | e.g. `claude-opus-4-8` | CLI default |
 | `--no-critic` | Trust the builder's own self-assessment | off |
 | `--no-steer` | Disable typing instructions mid-build | off (steering on) |
+| `--refs N` | Reference photos fetched up front to ground the build | 6 |
+| `--no-refs` | Don't fetch reference images | off |
 | `--allow-no-blender` | Start even if Blender is unreachable | off |
 | `--out DIR` | Output root | `./runs` |
 | `--plain` / `--verbose` | Output style | off |
@@ -139,6 +177,12 @@ render, or an out-of-band fallback render so there's always an image) and hands 
 separate, skeptical **critic** agent that opens the image and returns a strict JSON
 verdict. The run only finishes when `satisfied` is true and the score clears
 `--threshold`. This independent gate is what stops the bot declaring victory too early.
+
+By default there is **no fixed round count** — it keeps revising until the critic is
+satisfied. The other ways a run ends: the score **plateaus** (no improvement for
+`--patience` rounds — i.e. it's done getting better), the **`--budget`** is reached, you
+type **`/stop`**, or a high safety backstop (60 rounds) trips. The run returns the
+**best‑scoring** render, not necessarily the last one.
 
 ## Configuration via environment
 

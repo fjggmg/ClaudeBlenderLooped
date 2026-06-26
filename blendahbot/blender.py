@@ -144,7 +144,7 @@ class BlenderClient:
 # user's active camera and film setting are restored afterwards.
 _RENDER_TEMPLATE = """
 import bpy, mathutils
-from math import radians
+from math import radians, atan, tan, sin
 
 scene = bpy.context.scene
 geo = [o for o in scene.objects
@@ -172,11 +172,15 @@ try:
                                max(c.y for c in corners),
                                max(c.z for c in corners)))
         center = (mn + mx) / 2.0
-        radius = max((mx - mn).length, 1.0)
-        dist = radius * 1.5
-        loc = center + mathutils.Vector((dist, -dist, dist * 0.7))
-        cam.location = loc
-        cam.rotation_euler = (center - loc).to_track_quat('-Z', 'Y').to_euler()
+        radius = max((mx - mn).length / 2.0, 0.5)
+        lens = cam.data.lens; sensor = cam.data.sensor_width
+        hfov = 2.0 * atan((sensor / 2.0) / lens)
+        vfov = 2.0 * atan(tan(hfov / 2.0) / ({width} / {height}))
+        dist = (radius * 1.35) / sin(min(hfov, vfov) / 2.0)
+        cam.data.clip_end = max(cam.data.clip_end, dist * 4.0)
+        d = mathutils.Vector((1.0, -1.0, 0.6)).normalized()
+        cam.location = center + d * dist
+        cam.rotation_euler = (center - cam.location).to_track_quat('-Z', 'Y').to_euler()
     else:
         cam.location = (7.0, -7.0, 5.0)
         cam.rotation_euler = (radians(63), 0.0, radians(46))

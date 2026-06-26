@@ -24,3 +24,6 @@ dist/
 Thumbs.db
 .idea/
 .vscode/
+
+# downloaded assets (textures/HDRIs)
+assets/

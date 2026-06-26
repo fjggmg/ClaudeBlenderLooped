@@ -7,7 +7,7 @@ import asyncio
 import sys
 
 from . import __version__
-from . import auth
+from . import auth, settings
 from .blender import BlenderUnavailable
 from .builder import run_selftest
 from .config import BotConfig
@@ -26,15 +26,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("request", nargs="*", help="What to create, e.g. \"a cozy low-poly cabin in a pine forest at dusk\".")
     p.add_argument("--check", action="store_true", help="Run preflight checks and exit.")
     p.add_argument("--auth", action="store_true", help="Log in with your Claude subscription (one-time browser approve), save the token, and exit.")
+    p.add_argument("--settings", action="store_true", help="Open the interactive settings editor (API key, budget, model, quality), then exit.")
     p.add_argument("--selftest", action="store_true", help="Verify the claude CLI authenticates (tiny model call), then exit.")
     p.add_argument("--out", default=None, help="Output root directory (default: ./runs).")
-    p.add_argument("--max-rounds", type=int, default=None, help="Max build/critique rounds (default: 6).")
+    p.add_argument("--max-rounds", type=int, default=None, help="Hard cap on rounds (default: unlimited — runs until the reviewer is satisfied or quality plateaus).")
+    p.add_argument("--patience", type=int, default=None, help="Stop after this many rounds with no score improvement (default: 3; 0 = never).")
     p.add_argument("--max-turns", type=int, default=None, help="Max agent turns per round (default: 80).")
     p.add_argument("--budget", type=float, default=None, help="Hard USD spend cap for the build.")
     p.add_argument("--model", default=None, help="Model id (e.g. claude-opus-4-8). Default: CLI default.")
     p.add_argument("--threshold", type=int, default=None, help="Critic score (0-100) required to finish (default: 80).")
     p.add_argument("--no-critic", action="store_true", help="Skip the independent critic; trust the builder's self-assessment.")
     p.add_argument("--no-steer", action="store_true", help="Disable live steering (don't read stdin for mid-build instructions).")
+    p.add_argument("--refs", type=int, default=None, help="Reference photos to fetch up front to ground the build (default: 6).")
+    p.add_argument("--no-refs", action="store_true", help="Don't fetch reference images.")
     p.add_argument("--blender-host", default=None, help="Blender add-on host (default: localhost).")
     p.add_argument("--blender-port", type=int, default=None, help="Blender add-on port (default: 9876).")
     p.add_argument("--allow-no-blender", action="store_true", help="Proceed even if Blender is unreachable at start.")
@@ -45,9 +49,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _config_from_args(args: argparse.Namespace, request: str) -> BotConfig:
-    overrides: dict[str, object] = {
+    # Precedence (low -> high): BotConfig defaults < env < saved settings < CLI flags.
+    saved = settings.load_settings()
+    settings.apply_to_env(saved)  # exports ANTHROPIC_API_KEY if the user set one
+    overrides: dict[str, object] = settings.config_overrides(saved)
+
+    cli = {
         "out_root": args.out,
         "max_rounds": args.max_rounds,
+        "patience": args.patience,
         "max_turns_per_round": args.max_turns,
         "budget_usd": args.budget,
         "model": args.model,
@@ -56,11 +66,15 @@ def _config_from_args(args: argparse.Namespace, request: str) -> BotConfig:
         "blender_port": args.blender_port,
         "plain": args.plain or None,
         "verbose": args.verbose or None,
+        "refs": args.refs,
     }
+    overrides.update({k: v for k, v in cli.items() if v is not None})
     if args.no_critic:
         overrides["use_critic"] = False
     if args.no_steer:
         overrides["steer"] = False
+    if args.no_refs:
+        overrides["refs"] = 0
     if args.allow_no_blender:
         overrides["require_blender"] = False
     return BotConfig.from_env(request, **overrides)
@@ -74,6 +88,9 @@ def main(argv: list[str] | None = None) -> int:
         cfg = _config_from_args(args, "(preflight check)")
         report_preflight(preflight(cfg), console)
         return 0
+
+    if args.settings:
+        return settings.run_settings_menu()
 
     if args.auth:
         cfg = _config_from_args(args, "(auth)")
