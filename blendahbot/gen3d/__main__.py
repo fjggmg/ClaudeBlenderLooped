@@ -26,6 +26,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.prompt and not args.image:
         p.error("provide a text prompt or --image")
 
+    if args.prompt and len(args.prompt) > 65:
+        print("[gen3d] note: keep prompts short + front-loaded — the local model truncates to "
+              "~60 chars (put object, material, then key feature first).", file=sys.stderr, flush=True)
+
     def progress(stage: str) -> None:
         print(f"[gen3d] {stage}", file=sys.stderr, flush=True)
 

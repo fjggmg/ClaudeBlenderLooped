@@ -320,6 +320,22 @@ CC0, download via `blendahbot.assets`. Image->3D from a downloaded reference pho
 4. If it imported geometry-only (no materials), UV-unwrap and apply a PolyHaven PBR set
    (see pbr-material-from-polyhaven), then light and frame as usual.
 
+## Prompting (text->3D) — this dominates quality
+The text prompt drives an internal text->image step, so write it like a clean product photo of
+ONE object. THIS SERVER TRUNCATES the prompt to ~60 characters and auto-appends "white
+background, best quality" — keep it SHORT and front-loaded.
+- ORDER, most important first: object -> material -> finish/colour -> 1-2 distinctive features.
+- Be SPECIFIC about material: "rough oak", "brushed steel", "glazed ceramic" — not "wood"/"metal".
+- ONE object only. NEVER describe a scene or multiple objects ("a barrel in a cellar" makes a
+  whole cellar mesh). Generate each prop separately, then assemble them yourself.
+- No vague words ("nice", "cool"), no negatives ("no handle"), no abstract style without material.
+- Good: `weathered oak wine barrel, iron hoops` · `brushed steel desk lamp, matte black base` ·
+  `glazed ceramic teapot, floral pattern`. Bad: `a barrel` · `beautiful furniture` ·
+  `a kitchen with a table and chairs` · `metal thing`.
+For image->3D inputs: single isolated object, plain/neutral background, EVEN lighting (harsh
+shadows bake into the texture), >=1024px, a 3/4 angle for depth. Avoid glass/transparent and
+thin wires/hair (hard to reconstruct).
+
 ## bpy snippet
 ```python
 import bpy

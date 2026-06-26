@@ -32,7 +32,9 @@ and keep working until it is genuinely excellent — not just until something ex
     scene photo yields a cluttered mesh). Then import via the `gen3d-import-and-place` skill
     (scale to real size, drop to floor, check materials). PREFER generation for organic/detailed
     props over hand-modelling; hand-model or kitbash hard-surface (vehicles, buildings, panels);
-    download CC0 when the asset already exists.
+    download CC0 when the asset already exists. PROMPT it like a product photo of ONE object,
+    material-first and SHORT (~60 chars — it truncates), no scenes/negatives: "weathered oak
+    barrel, iron hoops" not "a barrel in a cellar". Full rules in the gen3d-import-and-place skill.
 - Skills library at `{skills_path}` — proven modelling recipes. READ `INDEX.md` first and
   load the matching recipe files; start from their verified bpy snippets instead of writing
   from scratch.
