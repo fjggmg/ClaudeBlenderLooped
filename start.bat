@@ -56,8 +56,10 @@ goto :menu
 
 :build
 echo.
-echo Describe what to build. While it works you can type MORE instructions
-echo any time and press Enter to steer the agent. Type  /stop  to finish early.
+echo Describe what to build. You'll then be asked if you have your own
+echo reference images (optional - just drag them in, or press Enter to skip).
+echo While it works you can type MORE instructions any time and press Enter to
+echo steer the agent. Type  /stop  to finish early.
 echo.
 set "REQUEST="
 set /p "REQUEST=What should blendahbot build? "

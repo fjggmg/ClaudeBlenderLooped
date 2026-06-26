@@ -44,9 +44,16 @@ download free HDRIs/textures/models, `pip install` helpers, write and run script
 
    (You can also just run a build — it triggers the same one-time approve automatically.
    Or set `ANTHROPIC_API_KEY` to use the API directly, pay-per-token.)
-3. **Blender** running, with the **Blender MCP add-on** enabled and its server started
-   (listening on `localhost:9876`). Install per
-   <https://www.blender.org/lab/mcp-server/>.
+3. **Blender** with the **Blender MCP add-on** installed (listening on `localhost:9876`
+   once started). Install per <https://www.blender.org/lab/mcp-server/>. You don't have to
+   open it yourself: if Blender isn't running when a build starts, blendahbot **auto-opens
+   it** (with `--online-mode` so the add-on's socket server starts itself) and waits for the
+   connection — then remembers where it found `blender.exe` for next time. Disable with
+   `--no-auto-blender`, point it at a specific build with `--blender-path`, or set the path
+   once in **Settings**. If Blender later **crashes or stops responding mid-build**,
+   blendahbot detects it between rounds, kills the stale instance and relaunches it,
+   reopening the last saved checkpoint so progress isn't lost. Disable with
+   `--no-auto-restart`.
 4. The **blender-mcp** stdio server. If you installed the Blender connector in Claude,
    the bot reuses it automatically; otherwise `pip install blender-mcp` or set
    `BLENDER_MCP_SERVER_CMD`.
@@ -92,6 +99,8 @@ otherwise pass as flags every time — saved to `~/.blendahbot/settings.json`:
   (leave blank to keep using the subscription login).
 - **Budget per build (USD)**, **model**, **quality threshold**, **max rounds**,
   **patience**, **reference count**, and toggles for the **critic** and **steering**.
+- **Auto-open Blender** (on by default) and a **Blender executable path** (blank =
+  auto-detect, then remembered after the first launch).
 
 CLI flags still override saved settings for a single run.
 
@@ -173,6 +182,27 @@ extensions. On Windows + Blackwell (RTX 50-series) that needs:
 
    With this, `gen3d` (without `--no-texture`) returns a textured GLB in ~20–60 s.
 
+### Extensions, add-ons & libraries (on demand)
+
+The builder isn't limited to what ships with Blender — when a build needs a capability the base
+install lacks (a procedural tree/scatter generator, a CAD/format importer, a node pack, an asset
+library, or a Python package its `bpy` code imports), it fetches and installs it into the **live**
+session, so the new operators/modules work immediately:
+
+```
+python -m blendahbot.addons search "tree generator"     # browse extensions.blender.org (no API key)
+python -m blendahbot.addons install sapling_tree_gen     # by id, or best-match a query
+python -m blendahbot.addons install-url https://host/some_addon.zip   # trusted sources only
+python -m blendahbot.addons asset-library "C:/packs/kit" --name Kit   # register an asset library
+python -m blendahbot.addons pip trimesh shapely          # into Blender's OWN Python (bpy can import it)
+python -m blendahbot.addons list                         # what's enabled
+```
+
+`install` pulls only from the official, vetted [Blender Extensions Platform](https://extensions.blender.org)
+and skips anything already enabled; `install-url` and `pip` run third-party code, so they're for
+sources you trust. Turn the whole capability off with `--no-addons` (or `BLENDAHBOT_NO_ADDONS=1`, or
+the Settings toggle) to forbid autonomous installation.
+
 ### Live steering (any launch method)
 
 Steering is on by default for every build. Lines you type are injected as authoritative
@@ -214,6 +244,9 @@ Then build:
 | `--no-steer` | Disable typing instructions mid-build | off (steering on) |
 | `--refs N` | Reference photos fetched up front to ground the build | 6 |
 | `--no-refs` | Don't fetch reference images | off |
+| `--no-auto-blender` | Don't auto-open Blender if it isn't running | off (auto-open on) |
+| `--no-auto-restart` | Don't restart Blender if it crashes/hangs mid-build | off (auto-restart on) |
+| `--blender-path PATH` | Blender executable to open (else auto-detect, then remembered) | auto |
 | `--allow-no-blender` | Start even if Blender is unreachable | off |
 | `--out DIR` | Output root | `./runs` |
 | `--plain` / `--verbose` | Output style | off |
@@ -257,11 +290,19 @@ type **`/stop`**, or a high safety backstop (60 rounds) trips. The run returns t
 | `BLENDAHBOT_CLAUDE_CLI` | Override the path to the `claude` CLI |
 | `BLENDAHBOT_MODEL` | Default model id |
 | `BLENDAHBOT_OUT` | Default output root |
+| `BLENDAHBOT_BLENDER` | Path to `blender.exe` to auto-open (else auto-detect) |
+| `BLENDAHBOT_NO_AUTO_BLENDER` | Set to disable auto-opening Blender |
+| `BLENDAHBOT_NO_AUTO_RESTART` | Set to disable auto-restarting a crashed/hung Blender |
+| `BLENDAHBOT_NO_ADDONS` | Set to forbid on-demand install of add-ons/extensions/libraries |
 
 ## Troubleshooting
 
 - **"Blender is not reachable"** — open Blender, enable the MCP add-on, start its
-  server. Confirm with `blendahbot --check`.
+  server. Confirm with `blendahbot --check`. (Normally blendahbot opens Blender for you;
+  this only shows if auto-open is off or it couldn't find/launch `blender.exe`.)
+- **Blender keeps getting relaunched mid-build** — it's crashing or freezing and
+  blendahbot is restarting it from the last checkpoint. Check `claude_stderr.log` and the
+  Blender console for the cause; `--no-auto-restart` turns the behavior off.
 - **"Could not locate the `claude` CLI"** — install Claude Code or set
   `BLENDAHBOT_CLAUDE_CLI` to the full path of `claude.exe`.
 - **`authentication failed` / HTTP 401** — the standalone CLI isn't logged in. Run

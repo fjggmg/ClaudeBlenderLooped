@@ -156,9 +156,9 @@ async def vet_and_generate(
     prompt: str,
     out: str | Path,
     *,
-    client,
     config,
     work_dir: str | Path,
+    blender: str | None = None,
     backend: str | None = None,
     image_path: str | None = None,
     texture: bool = True,
@@ -200,7 +200,7 @@ async def vet_and_generate(
         result = await asyncio.to_thread(
             be.generate, req, attempt_out, on_progress, timeout)
 
-        preview = render_isolated_preview(client, result.path, work_dir / f"try{i}", shots=shots)
+        preview = render_isolated_preview(result.path, work_dir / f"try{i}", blender=blender, shots=shots)
         if not preview.ok:
             verdict = Verdict(satisfied=False, score=0,
                               summary=f"could not render isolated preview: {preview.detail}",

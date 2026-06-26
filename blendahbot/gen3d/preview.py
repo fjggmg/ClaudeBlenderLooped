@@ -8,13 +8,13 @@ tangled with everything else. This module gives the bot an isolated checkpoint:
 render the GLB alone on a neutral backdrop from several angles, so it can decide
 ACCEPT / REGENERATE / FALL BACK *before* the asset pollutes the scene.
 
-The render happens inside the ALREADY-RUNNING Blender session (out-of-band, via
-:class:`~blendahbot.blender.BlenderClient`), but in a THROWAWAY scene — so the live
-working scene's objects, camera, world, selection and render settings are never
-touched. The approach (temporary ``bpy.data.scenes.new`` scene, import under a
-``temp_override``, render the non-active scene with ``render(scene=...)``, then
-remove ONLY the datablocks we created — never ``orphans_purge``, which is
-destructive) was verified live on Blender 5.1.2.
+The render runs in a SEPARATE, throwaway ``blender --background`` process — NOT the
+live session. That is the safe choice: importing a GLB through the live blender-mcp
+add-on can crash it (heavy importer operators drop the socket), whereas an ephemeral
+headless process is fully isolated by construction — it cannot touch the live scene,
+needs no add-on, and disappears (with everything it created) when it exits. It only
+needs ``blender.exe`` on disk and the GLB file; the live Blender doesn't even have to
+be running.
 
     python -m blendahbot.gen3d.preview assets/barrel.glb --out runs/.../preview
 """
@@ -23,12 +23,14 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..blender import BlenderClient, BlenderUnavailable
+from ..discovery import DiscoveryError, find_blender_executable
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
@@ -65,6 +67,7 @@ class PreviewResult:
     stats: AssetStats | None = None
     ok: bool = False
     detail: str = ""
+    engine: str = ""
 
 
 def heuristic_floor(stats: AssetStats | None, *, want_texture: bool = True) -> tuple[bool, list[str]]:
@@ -94,70 +97,88 @@ def heuristic_floor(stats: AssetStats | None, *, want_texture: bool = True) -> t
     return (not reasons), reasons
 
 
-def build_preview_program(
-    glb_path: str | Path,
-    out_dir: str | Path,
-    shots: Sequence | None = None,
-    res: tuple[int, int] = (480, 480),
-    engine: str = "BLENDER_EEVEE",
-    target_size: float = 2.0,
-) -> str:
-    """Return the bpy program that renders ``glb_path`` in an isolated temp scene.
-
-    Parameters are injected as a small literal header (no ``str.format``/f-string on
-    the body) so the bpy code — full of dict/set literals — stays readable and never
-    needs brace-escaping.
-    """
-    shots = list(shots) if shots is not None else DEFAULT_SHOTS
-    glb = str(Path(glb_path).resolve()).replace("\\", "/")
-    out = str(Path(out_dir).resolve()).replace("\\", "/")
-    header = (
-        f"_GLB = {json.dumps(glb)}\n"
-        f"_OUT = {json.dumps(out)}\n"
-        f"_RES = ({int(res[0])}, {int(res[1])})\n"
-        f"_ENGINE = {json.dumps(engine)}\n"
-        f"_TARGET = {float(target_size)!r}\n"
-        f"_SHOTS = {json.dumps(shots)}\n"
-    )
-    return header + _PREVIEW_BODY
-
-
 def render_isolated_preview(
-    client: BlenderClient,
     glb_path: str | Path,
     out_dir: str | Path,
     *,
+    blender: str | None = None,
     shots: Sequence | None = None,
-    res: tuple[int, int] = (480, 480),
+    res: int = 480,
     engine: str = "BLENDER_EEVEE",
     target_size: float = 2.0,
+    timeout: float = 240.0,
 ) -> PreviewResult:
-    """Render ``glb_path`` alone from several angles, leaving the live scene untouched.
+    """Render ``glb_path`` alone from several angles in a throwaway headless Blender.
 
-    Sends the render program through ``client.execute`` (out-of-band socket). A heavy
-    glTF import can occasionally drop the add-on socket; that surfaces as a transport
-    error here and is returned as ``ok=False`` rather than raising, so callers can
-    retry or fall back.
+    Never touches the live session — it spawns its own ``blender --background`` process,
+    so it cannot disturb (or be disturbed by) the build. Returns ``ok=False`` with a
+    reason if Blender can't be found/launched or the render fails, rather than raising.
     """
     glb = Path(glb_path)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    code = build_preview_program(glb, out, shots, res, engine, target_size)
+    shots = list(shots) if shots is not None else DEFAULT_SHOTS
     try:
-        resp = client.execute(code)
-    except BlenderUnavailable as ex:
+        exe = find_blender_executable(blender)
+    except DiscoveryError as ex:
         return PreviewResult(glb_path=glb, ok=False, detail=str(ex))
 
-    stdout = str(resp.get("stdout") or "")
-    if resp.get("status") == "ok" and "BB_PREVIEW_OK" in stdout:
+    script_path = _write_script()
+    try:
+        cmd = _preview_command(exe, script_path, glb, out, res, engine, target_size, shots)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return PreviewResult(glb_path=glb, ok=False,
+                                 detail=f"preview render timed out after {timeout:.0f}s")
+        except OSError as ex:
+            return PreviewResult(glb_path=glb, ok=False, detail=f"could not launch Blender: {ex}")
+    finally:
+        try:
+            os.unlink(script_path)
+        except OSError:
+            pass
+
+    stdout = proc.stdout or ""
+    if "BB_PREVIEW_OK" in stdout:
         manifest = _parse_manifest(stdout)
         stats = _stats_from_manifest(manifest) if manifest else None
         sheets = [Path(p) for p in (manifest or {}).get("shots", []) if Path(p).exists()]
         if not sheets:  # manifest unreadable but render ran — fall back to the dir
             sheets = sorted(out.glob("shot_*.png"))
-        return PreviewResult(glb_path=glb, sheet_paths=sheets, stats=stats, ok=True)
-    reason = str(resp.get("message") or resp.get("stderr") or "preview did not complete").strip()
-    return PreviewResult(glb_path=glb, ok=False, detail=reason or "preview did not complete")
+        engine_used = str((manifest or {}).get("engine") or engine)
+        return PreviewResult(glb_path=glb, sheet_paths=sheets, stats=stats, ok=True, engine=engine_used)
+    return PreviewResult(glb_path=glb, ok=False,
+                         detail=_failure_detail(stdout, proc.stderr or "", proc.returncode))
+
+
+def _preview_command(exe, script, glb, out, res, engine, target_size, shots) -> list[str]:
+    """The ``blender --background`` argv. ``--factory-startup`` skips user add-ons/prefs
+    (faster, and the live session's add-on never loads in this process)."""
+    return [
+        str(exe), "--background", "--factory-startup", "--python", str(script), "--",
+        str(Path(glb).resolve()), str(Path(out).resolve()), str(int(res)), str(engine),
+        repr(float(target_size)), json.dumps(list(shots)),
+    ]
+
+
+def _write_script() -> str:
+    f = tempfile.NamedTemporaryFile("w", suffix="_bbpreview.py", delete=False, encoding="utf-8")
+    try:
+        f.write(_PREVIEW_SCRIPT)
+    finally:
+        f.close()
+    return f.name
+
+
+def _failure_detail(stdout: str, stderr: str, returncode: int) -> str:
+    for line in stdout.splitlines():
+        if line.startswith("BB_PREVIEW_ERR"):
+            return line[len("BB_PREVIEW_ERR"):].strip() or "preview render failed"
+    err_lines = [ln for ln in stderr.splitlines() if ln.strip()]
+    if err_lines:
+        return err_lines[-1][:300]
+    return f"preview render failed (Blender exited {returncode})"
 
 
 # -- manifest parsing ------------------------------------------------------
@@ -205,190 +226,151 @@ def parse_preview_stats(stdout: str) -> AssetStats | None:
     return _stats_from_manifest(m) if m else None
 
 
-# -- the bpy program (runs inside the live Blender session) ----------------
-# Builds everything via the bpy.data API (NOT operators, which mutate the active
-# scene/selection), renders the NON-active temp scene with render(scene=...) so the
-# user's window scene never changes, and in `finally` removes ONLY the datablocks
-# this program created (set-difference vs a pre-snapshot). It NEVER calls
-# orphans_purge — verified live that it sweeps pre-existing user datablocks and
-# silently flips the working scene's active object.
-_PREVIEW_BODY = r'''
-import bpy, json, math, os
+# -- the headless bpy program (runs in its own throwaway Blender process) ---
+# Self-contained: bpy + stdlib only (it executes inside Blender's Python, which does
+# not have the blendahbot package on its path). Reads args after "--", clears the
+# startup scene, imports the GLB, normalizes/centers it, renders N angles to PNGs, and
+# prints a JSON manifest. No live session is involved, so no temp-scene/teardown dance
+# is needed — the process is ephemeral and takes everything with it on exit. EEVEE is
+# fast and works headless on 5.1; if a shot fails it falls back to Cycles once.
+_PREVIEW_SCRIPT = r'''
+import bpy, sys, json, math, os
 from mathutils import Vector
 
-os.makedirs(_OUT, exist_ok=True)
-win = bpy.context.window
-_KINDS = ("objects", "meshes", "materials", "images", "cameras", "lights",
-          "collections", "worlds")
-
-
-def _snap():
-    return {k: set(d.name_full for d in getattr(bpy.data, k)) for k in _KINDS}
-
-
-before = _snap()
-
-preview = bpy.data.scenes.new("BB_Gen3DPreview")
-pw = bpy.data.worlds.new("BB_Gen3DPreviewWorld")
-pw.use_nodes = True
-_bg = pw.node_tree.nodes.get("Background")
-if _bg is not None:
-    _bg.inputs[0].default_value = (0.18, 0.18, 0.19, 1.0)
-preview.world = pw
-
-manifest = {"shots": [], "object_count": 0, "mesh_count": 0, "face_count": 0,
-            "has_materials": False, "has_uvs": False, "texture_count": 0,
-            "max_texture_px": 0, "longest_dim": 0.0, "bbox_aspect": 0.0}
+_a = sys.argv[sys.argv.index("--") + 1:]
+GLB, OUT = _a[0], _a[1]
+RES = int(_a[2]) if len(_a) > 2 else 480
+ENGINE = _a[3] if len(_a) > 3 else "BLENDER_EEVEE"
+TARGET = float(_a[4]) if len(_a) > 4 else 2.0
+SHOTS = json.loads(_a[5]) if len(_a) > 5 else [["front", 0, 12], ["side", 90, 8],
+                                               ["back_3q", 150, 18], ["high_3q", 40, 38]]
+os.makedirs(OUT, exist_ok=True)
 
 try:
-    # Import INTO the temp scene/collection only (5.1 defaults select created objects
-    # and wrap them in a new collection; the override + flag keep that out of the
-    # user's working view layer).
-    with bpy.context.temp_override(window=win, scene=preview,
-                                   view_layer=preview.view_layers[0],
-                                   collection=preview.collection):
-        bpy.ops.import_scene.gltf(filepath=_GLB, import_scene_as_collection=False)
+    bpy.ops.preferences.addon_enable(module="io_scene_gltf2")
+except Exception:
+    pass  # glTF importer is enabled by default; this is just belt-and-braces
 
-    after_import = _snap()
-    new_objs = [bpy.data.objects[n] for n in (after_import["objects"] - before["objects"])]
-    for o in new_objs:
-        if o.name not in preview.objects:
+# Fresh process: clear the startup scene so ONLY the asset is in frame.
+for _o in list(bpy.data.objects):
+    bpy.data.objects.remove(_o, do_unlink=True)
+
+before = set(bpy.data.objects)
+try:
+    bpy.ops.import_scene.gltf(filepath=GLB)
+except Exception as ex:
+    print("BB_PREVIEW_ERR glTF import failed:", ex)
+    sys.exit(2)
+new = [o for o in bpy.data.objects if o not in before]
+meshes = [o for o in new if o.type == "MESH"]
+if not meshes:
+    print("BB_PREVIEW_ERR glTF import produced no mesh")
+    sys.exit(2)
+
+bpy.context.view_layer.update()
+raw = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
+mn = Vector((min(c.x for c in raw), min(c.y for c in raw), min(c.z for c in raw)))
+mx = Vector((max(c.x for c in raw), max(c.y for c in raw), max(c.z for c in raw)))
+dims = mx - mn
+longest = max(dims.x, dims.y, dims.z) or 1.0
+shortest = max(min(dims.x, dims.y, dims.z), 1e-6)
+
+center = (mn + mx) / 2.0
+for o in meshes:
+    o.location -= center
+    o.scale *= (TARGET / longest)
+bpy.context.view_layer.update()
+cs = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
+bcen = sum(cs, Vector()) / len(cs)
+radius = max((c - bcen).length for c in cs) or 1.0
+
+faces = 0
+has_uv = has_mat = False
+images = {}
+for o in meshes:
+    faces += len(o.data.polygons)
+    if o.data.uv_layers:
+        has_uv = True
+    for slot in o.data.materials:
+        if slot is None:
+            continue
+        has_mat = True
+        if slot.use_nodes and slot.node_tree:
+            for node in slot.node_tree.nodes:
+                if node.type == "TEX_IMAGE" and node.image:
+                    try:
+                        images[node.image.name_full] = int(max(node.image.size))
+                    except Exception:
+                        images[node.image.name_full] = 0
+
+scene = bpy.context.scene
+world = bpy.data.worlds.new("BB_PreviewWorld")
+world.use_nodes = True
+_bg = world.node_tree.nodes.get("Background")
+if _bg is not None:
+    _bg.inputs[0].default_value = (0.18, 0.18, 0.19, 1.0)
+scene.world = world
+
+cam_data = bpy.data.cameras.new("BB_PreviewCam")
+cam = bpy.data.objects.new("BB_PreviewCam", cam_data)
+scene.collection.objects.link(cam)
+scene.camera = cam
+kd = bpy.data.lights.new("BB_PreviewKey", "SUN"); kd.energy = 3.5
+key = bpy.data.objects.new("BB_PreviewKey", kd); scene.collection.objects.link(key)
+key.rotation_euler = (math.radians(55), math.radians(15), math.radians(40))
+fd = bpy.data.lights.new("BB_PreviewFill", "SUN"); fd.energy = 1.2
+fill = bpy.data.objects.new("BB_PreviewFill", fd); scene.collection.objects.link(fill)
+fill.rotation_euler = (math.radians(60), math.radians(-25), math.radians(-110))
+
+r = scene.render
+r.resolution_x = r.resolution_y = RES
+r.image_settings.file_format = "PNG"
+r.image_settings.color_mode = "RGB"
+try:
+    r.engine = ENGINE
+except (TypeError, ValueError):
+    r.engine = "BLENDER_EEVEE"
+
+hfov = 2 * math.atan((cam_data.sensor_width / 2) / cam_data.lens)
+vfov = 2 * math.atan(math.tan(hfov / 2) / 1.0)
+dist = (radius * 1.3) / math.sin(min(hfov, vfov) / 2)
+cam_data.clip_start = max(dist * 0.01, 0.001)
+cam_data.clip_end = dist * 100.0
+
+written = []
+used_engine = r.engine
+for i, (label, az, el) in enumerate(SHOTS):
+    aa, ee = math.radians(az), math.radians(el)
+    cam.location = bcen + Vector((dist * math.cos(ee) * math.sin(aa),
+                                  -dist * math.cos(ee) * math.cos(aa),
+                                  dist * math.sin(ee)))
+    cam.rotation_euler = (bcen - cam.location).to_track_quat("-Z", "Y").to_euler()
+    p = os.path.join(OUT, "shot_%s.png" % label).replace("\\", "/")
+    r.filepath = p
+    try:
+        bpy.ops.render.render(write_still=True)
+    except Exception as ex:
+        if i == 0 and r.engine != "CYCLES":
+            print("BB_PREVIEW_NOTE EEVEE render failed, falling back to Cycles:", ex)
+            r.engine = "CYCLES"; used_engine = "CYCLES"
             try:
-                preview.collection.objects.link(o)
-            except RuntimeError:
+                scene.cycles.samples = 16
+            except Exception:
                 pass
-    meshes = [o for o in new_objs if o.type == "MESH"]
-    if not meshes:
-        raise RuntimeError("glTF import produced no mesh")
+            bpy.ops.render.render(write_still=True)
+        else:
+            raise
+    written.append(p)
 
-    bpy.context.view_layer.update()
-    raw = []
-    for o in meshes:
-        raw += [o.matrix_world @ Vector(c) for c in o.bound_box]
-    mn = Vector((min(c.x for c in raw), min(c.y for c in raw), min(c.z for c in raw)))
-    mx = Vector((max(c.x for c in raw), max(c.y for c in raw), max(c.z for c in raw)))
-    dims = mx - mn
-    longest = max(dims.x, dims.y, dims.z) or 1.0
-    shortest = max(min(dims.x, dims.y, dims.z), 1e-6)
-    manifest["longest_dim"] = round(longest, 5)
-    manifest["bbox_aspect"] = round(longest / shortest, 3)
-
-    # Normalize to a known size + center on the origin so framing is consistent.
-    center = (mn + mx) / 2.0
-    for o in meshes:
-        o.location -= center
-        o.scale *= (_TARGET / longest)
-    bpy.context.view_layer.update()
-    cs = []
-    for o in meshes:
-        cs += [o.matrix_world @ Vector(c) for c in o.bound_box]
-    bcen = sum(cs, Vector()) / len(cs)
-    radius = max((c - bcen).length for c in cs) or 1.0
-
-    # Geometry + material facts for the cheap heuristic gate.
-    faces = 0
-    has_uv = False
-    has_mat = False
-    images = {}
-    for o in meshes:
-        faces += len(o.data.polygons)
-        if o.data.uv_layers:
-            has_uv = True
-        for slot in o.data.materials:
-            if slot is None:
-                continue
-            has_mat = True
-            if slot.use_nodes and slot.node_tree is not None:
-                for node in slot.node_tree.nodes:
-                    if node.type == "TEX_IMAGE" and node.image is not None:
-                        try:
-                            images[node.image.name_full] = int(max(node.image.size))
-                        except (ValueError, TypeError):
-                            images[node.image.name_full] = 0
-    manifest["object_count"] = len(new_objs)
-    manifest["mesh_count"] = len(meshes)
-    manifest["face_count"] = faces
-    manifest["has_materials"] = bool(has_mat)
-    manifest["has_uvs"] = bool(has_uv)
-    manifest["texture_count"] = len(images)
-    manifest["max_texture_px"] = int(max(images.values())) if images else 0
-
-    # Camera + lights OWNED by the temp scene (data-API, no operators).
-    cam_data = bpy.data.cameras.new("BB_Gen3DPreviewCam")
-    cam = bpy.data.objects.new("BB_Gen3DPreviewCam", cam_data)
-    preview.collection.objects.link(cam)
-    preview.camera = cam
-    kd = bpy.data.lights.new("BB_Gen3DPreviewKey", "SUN")
-    kd.energy = 3.5
-    key = bpy.data.objects.new("BB_Gen3DPreviewKey", kd)
-    preview.collection.objects.link(key)
-    key.rotation_euler = (math.radians(55), math.radians(15), math.radians(40))
-    fd = bpy.data.lights.new("BB_Gen3DPreviewFill", "SUN")
-    fd.energy = 1.2
-    fill = bpy.data.objects.new("BB_Gen3DPreviewFill", fd)
-    preview.collection.objects.link(fill)
-    fill.rotation_euler = (math.radians(60), math.radians(-25), math.radians(-110))
-
-    pr = preview.render
-    try:
-        pr.engine = _ENGINE
-    except (TypeError, ValueError):
-        pr.engine = "BLENDER_EEVEE"
-    try:
-        preview.eevee.taa_render_samples = 16
-    except Exception:
-        pass
-    pr.resolution_x, pr.resolution_y = _RES
-    pr.resolution_percentage = 100
-    pr.film_transparent = False
-    pr.image_settings.file_format = "PNG"
-    pr.image_settings.color_mode = "RGB"
-
-    aspect = _RES[0] / _RES[1]
-    hfov = 2 * math.atan((cam_data.sensor_width / 2) / cam_data.lens)
-    vfov = 2 * math.atan(math.tan(hfov / 2) / aspect)
-    dist = (radius * 1.3) / math.sin(min(hfov, vfov) / 2)
-    cam_data.clip_start = max(dist * 0.01, 0.001)
-    cam_data.clip_end = dist * 100.0
-
-    for label, az, el in _SHOTS:
-        a = math.radians(az)
-        e = math.radians(el)
-        cam.location = bcen + Vector((dist * math.cos(e) * math.sin(a),
-                                      -dist * math.cos(e) * math.cos(a),
-                                      dist * math.sin(e)))
-        cam.rotation_euler = (bcen - cam.location).to_track_quat("-Z", "Y").to_euler()
-        p = os.path.join(_OUT, "shot_%s.png" % label).replace("\\", "/")
-        pr.filepath = p
-        # Render the NON-active preview scene; window.scene is never swapped.
-        bpy.ops.render.render(write_still=True, scene=preview.name)
-        manifest["shots"].append(p)
-
-    print("BB_PREVIEW=" + json.dumps(manifest))
-    print("BB_PREVIEW_OK")
-finally:
-    # Targeted teardown: remove ONLY what we created (set-difference vs `before`).
-    # Scene first (drops it as a user of its collection/world), then objects, then
-    # data, when users hit 0. NEVER a global orphan purge (it sweeps the user's own
-    # pre-existing orphans and flips their active object).
-    after = _snap()
-    try:
-        if win is None or win.scene is not preview:
-            bpy.data.scenes.remove(preview, do_unlink=True)
-    except Exception as _scene_err:
-        print("BB_PREVIEW_CLEANUP_WARN scene", _scene_err)
-    for kind in ("objects", "collections", "meshes", "cameras", "lights",
-                 "materials", "images", "worlds"):
-        coll = getattr(bpy.data, kind)
-        for name in (after.get(kind, set()) - before.get(kind, set())):
-            d = coll.get(name)
-            if d is None:
-                continue
-            try:
-                if kind == "objects" or d.users == 0:
-                    coll.remove(d)
-            except (ReferenceError, RuntimeError):
-                pass
+manifest = {
+    "shots": written, "object_count": len(new), "mesh_count": len(meshes),
+    "face_count": faces, "has_materials": has_mat, "has_uvs": has_uv,
+    "texture_count": len(images), "max_texture_px": int(max(images.values())) if images else 0,
+    "longest_dim": round(longest, 5), "bbox_aspect": round(longest / shortest, 3),
+    "engine": used_engine,
+}
+print("BB_PREVIEW=" + json.dumps(manifest))
+print("BB_PREVIEW_OK")
 '''
 
 
@@ -426,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = argparse.ArgumentParser(
         prog="blendahbot.gen3d.preview",
-        description="Render a multi-angle isolated preview of a GLB in the live Blender session.",
+        description="Render a multi-angle isolated preview of a GLB in a throwaway headless Blender.",
     )
     p.add_argument("glb", help="Path to the .glb to preview.")
     p.add_argument("--out", default="preview", help="Directory for the contact-sheet PNGs.")
@@ -434,15 +416,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="Comma list of catalog labels or label:az:el (default: front,side,back_3q,high_3q).")
     p.add_argument("--res", type=int, default=480, help="Square render resolution (default 480).")
     p.add_argument("--engine", default="BLENDER_EEVEE", help="Render engine (default fast EEVEE).")
-    p.add_argument("--host", default=os.environ.get("BLENDER_MCP_HOST", "localhost"))
-    p.add_argument("--port", type=int, default=int(os.environ.get("BLENDER_MCP_PORT", "9876")))
-    p.add_argument("--timeout", type=float, default=300.0)
+    p.add_argument("--blender", default=None, help="Path to blender.exe (default: auto-detect).")
+    p.add_argument("--timeout", type=float, default=240.0)
     args = p.parse_args(argv)
 
-    client = BlenderClient(args.host, args.port, timeout=args.timeout)
     result = render_isolated_preview(
-        client, args.glb, args.out,
-        shots=_parse_shot_arg(args.shots), res=(args.res, args.res), engine=args.engine,
+        args.glb, args.out, blender=args.blender, shots=_parse_shot_arg(args.shots),
+        res=args.res, engine=args.engine, timeout=args.timeout,
     )
     if not result.ok:
         print(f"[preview] failed: {result.detail}", file=sys.stderr)
@@ -453,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
         s = result.stats
         print(
             f"[preview] {s.mesh_count} mesh(es), {s.face_count} faces, textured={s.has_materials}, "
-            f"uvs={s.has_uvs}, aspect={s.bbox_aspect}",
+            f"uvs={s.has_uvs}, aspect={s.bbox_aspect}, engine={result.engine}",
             file=sys.stderr,
         )
     return 0

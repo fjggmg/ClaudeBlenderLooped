@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 import urllib.parse
 import urllib.request
@@ -191,6 +192,111 @@ def _download(url: str, out_dir: Path, idx: int, timeout: float) -> Path | None:
     except OSError:
         return None
     return path
+
+
+# --------------------------------------------------------------------------
+# User-supplied references (files the user already has on disk)
+# --------------------------------------------------------------------------
+
+# Image suffixes we accept when the user points us at their own files/folders.
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+
+
+def parse_path_tokens(line: str) -> list[str]:
+    """Split a line of typed/dragged input into individual path tokens.
+
+    Windows wraps a dragged path in double quotes only when it contains spaces,
+    and several files dragged together arrive space-separated. We honour single
+    and double quotes (so spaced paths stay intact), treat unquoted whitespace as
+    a separator, and strip any ``file://`` scheme. Backslashes are left as-is —
+    they are path separators here, not escapes.
+    """
+    tokens: list[str] = []
+    buf: list[str] = []
+    quote: str | None = None
+    for ch in line.strip():
+        if quote:
+            if ch == quote:
+                quote = None
+            else:
+                buf.append(ch)
+        elif ch in "\"'":
+            quote = ch
+        elif ch.isspace():
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        tokens.append("".join(buf))
+
+    cleaned: list[str] = []
+    for tok in tokens:
+        low = tok.lower()
+        if low.startswith("file:///"):
+            tok = urllib.parse.unquote(tok[8:])
+        elif low.startswith("file://"):
+            tok = urllib.parse.unquote(tok[7:])
+        cleaned.append(tok)
+    return cleaned
+
+
+def resolve_reference_specs(specs: list[str]) -> tuple[list[Path], list[str]]:
+    """Expand path specs into existing image files.
+
+    A spec may be an image file or a directory (its image files are included).
+    Returns ``(images, unusable)`` where ``unusable`` lists specs that pointed at
+    nothing we can use (missing path, non-image file, or empty folder) so the
+    caller can tell the user which inputs were ignored.
+    """
+    images: list[Path] = []
+    unusable: list[str] = []
+    for spec in specs:
+        raw = str(spec).strip().strip('"').strip("'")
+        if not raw:
+            continue
+        src = Path(raw).expanduser()
+        if src.is_dir():
+            found = [
+                f for f in sorted(src.iterdir())
+                if f.is_file() and f.suffix.lower() in _IMAGE_EXTS
+            ]
+            if found:
+                images.extend(found)
+            else:
+                unusable.append(raw)
+        elif src.is_file() and src.suffix.lower() in _IMAGE_EXTS:
+            images.append(src)
+        else:
+            unusable.append(raw)
+    return images, unusable
+
+
+def ingest_user_references(
+    images: list[Path], out_dir: Path, start_index: int = 0
+) -> list[Path]:
+    """Copy already-resolved user image files into ``out_dir`` as ``user_ref_NN``.
+
+    The ``user_ref_`` prefix keeps them distinct from fetched ``ref_`` photos so
+    the builder prompt can treat the user's own images as authoritative. Returns
+    the files actually copied (skipping any that fail to copy).
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    saved: list[Path] = []
+    idx = start_index
+    for img in images:
+        img = Path(img)
+        ext = img.suffix.lower() or ".png"
+        dest = out_dir / f"user_ref_{idx:02d}{ext}"
+        try:
+            shutil.copy2(img, dest)
+        except OSError:
+            continue
+        saved.append(dest)
+        idx += 1
+    return saved
 
 
 def main(argv: list[str] | None = None) -> int:

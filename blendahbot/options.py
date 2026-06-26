@@ -57,7 +57,10 @@ def build_builder_options(
     ]
 
     return ClaudeAgentOptions(
-        system_prompt=builder_system_prompt(render_dir, str(skills_dir()), config.vet_assets),
+        system_prompt=builder_system_prompt(
+            render_dir, str(skills_dir()), config.vet_assets,
+            config.vet_max_attempts, config.vet_score_threshold, config.addons,
+        ),
         mcp_servers={
             "blender": _blender_server(config),
             "bb": tools_server,

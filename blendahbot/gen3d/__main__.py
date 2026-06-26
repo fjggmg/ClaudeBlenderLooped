@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -46,10 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     # --- inspect a generated asset in isolation before placing it ---
     p.add_argument("--preview", default=None, metavar="DIR",
                    help="After generating, render a multi-angle preview of the asset ALONE into DIR "
-                        "(throwaway Blender scene; live scene untouched). Prints the PNG paths to look at.")
+                        "(throwaway headless Blender; live scene never touched). Prints the PNG paths to look at.")
     p.add_argument("--preview-shots", default=None,
                    help="Comma list of catalog labels or label:az:el for --preview "
                         "(default: front,side,back_3q,high_3q).")
+    p.add_argument("--blender", default=None,
+                   help="Path to blender.exe for previews (default: auto-detect; or set BLENDAHBOT_BLENDER).")
     p.add_argument("--vet", action="store_true",
                    help="Opt-in: render the isolated preview, have an INDEPENDENT critic judge it, and "
                         "auto-regenerate (new seed / tightened prompt) until it passes or attempts run out.")
@@ -85,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.preview:
-        _preview_one(_make_client(args), result.path, args.preview, args.preview_shots)
+        _preview_one(result.path, args.preview, args.preview_shots, args.blender)
     print(result.path)  # the agent reads this from stdout
     return 0
 
@@ -103,11 +104,10 @@ def _run_compare(args: argparse.Namespace, progress) -> int:
         return 1
 
     entries: list[dict] = []
-    client = _make_client(args) if args.preview else None
     for r in results:
         entry = {"backend": r.backend, "path": str(r.path)}
-        if client is not None:
-            pv = _preview_one(client, r.path, str(Path(args.preview) / r.backend), args.preview_shots)
+        if args.preview:
+            pv = _preview_one(r.path, str(Path(args.preview) / r.backend), args.preview_shots, args.blender)
             entry["preview_images"] = [str(sp) for sp in pv.sheet_paths]
         entries.append(entry)
     # The builder reads this: import each candidate, render, keep the best, delete the rest.
@@ -129,7 +129,7 @@ def _run_vet(args: argparse.Namespace, progress) -> int:
     try:
         vr = asyncio.run(vet_and_generate(
             args.prompt, args.out,
-            client=_make_client(args), config=config, work_dir=work_dir,
+            config=config, work_dir=work_dir, blender=args.blender,
             backend=args.backend, image_path=args.image, texture=not args.no_texture,
             seed=args.seed, face_count=args.face_count,
             max_attempts=args.vet_attempts, accept_threshold=args.vet_accept,
@@ -155,18 +155,10 @@ def _run_vet(args: argparse.Namespace, progress) -> int:
     return 0 if vr.vetted else 0  # an unvetted-but-produced asset is not a hard failure
 
 
-def _make_client(args: argparse.Namespace):
-    from ..blender import BlenderClient
-
-    host = os.environ.get("BLENDER_MCP_HOST", "localhost")
-    port = int(os.environ.get("BLENDER_MCP_PORT", "9876"))
-    return BlenderClient(host, port, timeout=max(args.timeout, 300.0))
-
-
-def _preview_one(client, glb, out_dir: str, shots_arg: str | None):
+def _preview_one(glb, out_dir: str, shots_arg: str | None, blender: str | None):
     from .preview import _parse_shot_arg, render_isolated_preview
 
-    pv = render_isolated_preview(client, glb, out_dir, shots=_parse_shot_arg(shots_arg))
+    pv = render_isolated_preview(glb, out_dir, blender=blender, shots=_parse_shot_arg(shots_arg))
     if pv.ok:
         print(f"PREVIEW: {out_dir} ({len(pv.sheet_paths)} images — Read them to vet the asset)",
               file=sys.stderr)

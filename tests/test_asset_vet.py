@@ -82,7 +82,7 @@ class VetAndGenerateTests(unittest.TestCase):
         with ps[0], ps[1], ps[2], ps[3], tempfile.TemporaryDirectory() as d:
             out = Path(d) / "barrel.glb"
             vr = _run(vetmod.vet_and_generate(
-                "weathered oak barrel", out, client=None, config=None, work_dir=Path(d) / "wk",
+                "weathered oak barrel", out, config=None, work_dir=Path(d) / "wk",
                 max_attempts=3, accept_threshold=55,
             ))
             out_exists = out.exists()
@@ -99,7 +99,7 @@ class VetAndGenerateTests(unittest.TestCase):
         with ps[0], ps[1], ps[2], ps[3], tempfile.TemporaryDirectory() as d:
             out = Path(d) / "barrel.glb"
             vr = _run(vetmod.vet_and_generate(
-                "weathered oak barrel", out, client=None, config=None, work_dir=Path(d) / "wk",
+                "weathered oak barrel", out, config=None, work_dir=Path(d) / "wk",
                 max_attempts=2, accept_threshold=55,
             ))
             out_exists = out.exists()
@@ -118,7 +118,7 @@ class VetAndGenerateTests(unittest.TestCase):
         with ps[0], ps[1], ps[2], ps[3], tempfile.TemporaryDirectory() as d:
             out = Path(d) / "barrel.glb"
             vr = _run(vetmod.vet_and_generate(
-                "barrel", out, client=None, config=None, work_dir=Path(d) / "wk",
+                "barrel", out, config=None, work_dir=Path(d) / "wk",
                 max_attempts=2, accept_threshold=55,
             ))
         self.assertFalse(vr.vetted)
@@ -137,7 +137,7 @@ class VetAndGenerateTests(unittest.TestCase):
              tempfile.TemporaryDirectory() as d:
             out = Path(d) / "barrel.glb"
             vr = _run(vetmod.vet_and_generate(
-                "barrel", out, client=None, config=None, work_dir=Path(d) / "wk",
+                "barrel", out, config=None, work_dir=Path(d) / "wk",
                 max_attempts=1, accept_threshold=55,
             ))
             out_exists = out.exists()

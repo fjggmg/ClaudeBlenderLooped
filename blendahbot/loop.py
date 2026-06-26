@@ -5,23 +5,36 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import ClaudeSDKClient
 
+from . import settings
 from .artifacts import Transcript, collect_pngs, write_report
-from .blender import BlenderClient, BlenderUnavailable
+from .blender import BlenderClient, BlenderUnavailable, launch_blender
 from .builder import RoundResult, Verdict, run_critic, run_round
 from .config import BotConfig
-from .discovery import DiscoveryError, find_blender_mcp_command, find_claude_cli
+from .discovery import (
+    DiscoveryError,
+    find_blender_executable,
+    find_blender_mcp_command,
+    find_claude_cli,
+)
 from .errors import AUTH_REMEDIATION, AuthError
 from .options import build_builder_options
 from .prompts import first_round_prompt, revision_prompt
-from .refs import fetch_references
+from .refs import (
+    fetch_references,
+    ingest_user_references,
+    parse_path_tokens,
+    resolve_reference_specs,
+)
 from .skills import ensure_seed_skills
 from .steering import Steering
+from .supervisor import BlenderSupervisor
 from .tools import CompletionState, make_tools_server
 from .ui import Console
 
@@ -89,10 +102,62 @@ def report_preflight(pf: Preflight, console: Console) -> None:
         console.error(err)
 
 
+def ensure_blender(
+    config: BotConfig, pf: Preflight, console: Console, supervisor: BlenderSupervisor
+) -> Preflight:
+    """Open Blender if it isn't running, wait for it, and remember where it lives.
+
+    Mutates and returns ``pf`` with a refreshed Blender status, and hands the
+    launched process to ``supervisor`` so it can be restarted later. A no-op when
+    Blender is already reachable or auto-launch is disabled. Never raises — on any
+    failure it leaves ``pf.blender_ok`` False for the caller to handle.
+    """
+    if pf.blender_ok or not config.auto_launch_blender:
+        return pf
+
+    try:
+        exe = find_blender_executable(config.blender_path)
+    except DiscoveryError as ex:
+        console.warn(str(ex))
+        return pf
+
+    console.info(f"Blender isn't running — opening it: {exe}")
+    try:
+        proc = launch_blender(exe, config.blender_port)
+    except OSError as ex:
+        console.warn(f"could not launch Blender: {ex}")
+        return pf
+    supervisor.adopt(proc, exe)
+
+    # Remember where we found it (only if the user hadn't pinned a path already).
+    if config.blender_path is None:
+        try:
+            if settings.remember_blender_path(exe):
+                console.info(f"saved Blender location for next time → {settings.settings_path()}")
+        except OSError:
+            pass
+
+    console.info("waiting for Blender to start its MCP server…")
+    ok, detail = supervisor.client.wait_until_ready(timeout=config.blender_launch_timeout)
+    pf.blender_ok = ok
+    pf.blender_detail = detail
+    if ok:
+        console.success(f"Blender connected: {detail}")
+    else:
+        console.warn(
+            "Blender is open but its MCP server isn't reachable yet. In Blender, open the "
+            "sidebar (press N) → BlenderMCP and click 'Start MCP Server', then retry."
+        )
+    return pf
+
+
 async def build(config: BotConfig, console: Console) -> RunResult:
     """Run the full build loop. Returns a :class:`RunResult`."""
     pf = preflight(config)
     report_preflight(pf, console)
+    supervisor = BlenderSupervisor(config, console)
+    if not pf.blender_ok and config.require_blender:
+        pf = ensure_blender(config, pf, console, supervisor)
     if not pf.ready:
         raise DiscoveryError("; ".join(pf.errors) or "preflight failed")
     if not pf.blender_ok and config.require_blender:
@@ -102,7 +167,11 @@ async def build(config: BotConfig, console: Console) -> RunResult:
             "to proceed anyway.)"
         )
 
-    blender = BlenderClient(config.blender_host, config.blender_port)
+    blender = supervisor.client
+    # Keep Blender alive across the build: probe it between rounds and restart a
+    # crashed/hung instance, reopening this checkpoint so progress isn't lost.
+    restart_enabled = config.auto_restart_blender and (config.require_blender or pf.blender_ok)
+    checkpoint_path = config.run_dir / "checkpoint.blend"
     config.run_dir.mkdir(parents=True, exist_ok=True)
     (config.run_dir / "request.txt").write_text(config.request, encoding="utf-8")
     rounds: list[dict[str, Any]] = []
@@ -134,32 +203,41 @@ async def build(config: BotConfig, console: Console) -> RunResult:
         client = ClaudeSDKClient(options)
         await client.connect()
 
+        # Seed the modelling skills library (idempotent) so the builder can consult it.
+        ensure_seed_skills()
+
+        # Ground the build in references before round 1. Ask for the user's OWN
+        # images first — while stdin is still ours, before steering claims it —
+        # then top up with fetched stock photos.
+        reference_dir = config.run_dir / "reference"
+        user_refs = await _collect_user_references(config, reference_dir, console)
+
+        # Live steering owns stdin from here on, so only start it once the
+        # reference prompt has returned.
         steering.start()
         if steering.enabled:
             console.info("💬 Steering on: type instructions any time + Enter to redirect. '/stop' to finish early.")
 
-        # Seed the modelling skills library (idempotent) so the builder can consult it.
-        ensure_seed_skills()
-
-        # Ground the build in real reference photos before round 1.
-        reference_dir = config.run_dir / "reference"
-        reference_paths: list[Path] = []
+        web_refs: list[Path] = []
         if config.refs > 0:
             console.info(f"gathering up to {config.refs} reference image(s)…")
-            reference_paths = await asyncio.to_thread(
+            web_refs = await asyncio.to_thread(
                 fetch_references, config.request, reference_dir, config.refs
             )
-            if reference_paths:
-                console.success(f"got {len(reference_paths)} reference image(s) → {reference_dir}")
-            else:
+            if web_refs:
+                console.success(f"got {len(web_refs)} reference image(s) → {reference_dir}")
+            elif not user_refs:
                 console.warn("no references fetched; the builder will research on its own.")
+        reference_paths = user_refs + web_refs
         ref_dir_str = str(reference_dir).replace("\\", "/")
         ref_path_strs = [str(p).replace("\\", "/") for p in reference_paths]
+        user_ref_strs = [str(p).replace("\\", "/") for p in user_refs]
 
         best_score = -1
         best_render: Path | None = None
         stale_rounds = 0
         n = 0
+        pending_restart_note = False
         cap_label = str(config.max_rounds) if config.max_rounds else "∞"
         while True:
             n += 1
@@ -177,14 +255,42 @@ async def build(config: BotConfig, console: Console) -> RunResult:
             render_path = round_dir / "render.png"
             state.reset()
 
+            # Don't spend a round's agent turns on a Blender that died since last
+            # round — probe it first and restart (reopening the checkpoint) if needed.
+            if restart_enabled:
+                healthy, restarted = supervisor.ensure_healthy(
+                    checkpoint=checkpoint_path if checkpoint_path.exists() else None
+                )
+                pending_restart_note = pending_restart_note or restarted
+                if not healthy and config.require_blender:
+                    outcome = "stopped: Blender was unavailable and could not be restarted"
+                    console.error(outcome)
+                    break
+                if not healthy:
+                    # --allow-no-blender: the user opted to tolerate a missing Blender,
+                    # so degrade to running without it rather than hard-stopping.
+                    console.warn("Blender is unavailable; continuing without it.")
+
             if n == 1 or last_verdict is None:
                 prompt = first_round_prompt(
-                    config.request, str(render_path).replace("\\", "/"), ref_dir_str, ref_path_strs
+                    config.request, str(render_path).replace("\\", "/"), ref_dir_str,
+                    ref_path_strs, user_ref_strs,
                 )
             else:
                 prompt = revision_prompt(
                     config.request, str(render_path).replace("\\", "/"), last_verdict, ref_dir_str
                 )
+
+            # Tell the builder when the scene was just rolled back by a restart, so
+            # it re-checks state instead of assuming an interrupted step survived.
+            if pending_restart_note:
+                prompt += (
+                    "\n\n[System note: Blender was just restarted (it had crashed or stopped "
+                    "responding) and the scene was restored from the last saved checkpoint. "
+                    "Work from an interrupted step may be missing — inspect the current scene "
+                    "before continuing.]"
+                )
+                pending_restart_note = False
 
             # Fold in anything typed between rounds.
             pending = steering.drain()
@@ -213,7 +319,53 @@ async def build(config: BotConfig, console: Console) -> RunResult:
                     "claude CLI could not start or authenticate. See claude_stderr.log."
                 )
 
-            images = _gather_images(blender, state, render_path, round_dir, console)
+            # If Blender died mid-build, restart it now — before the out-of-band
+            # render/digest below, which would otherwise block on the dead socket.
+            blender_alive = True
+            scene_rolled_back = False
+            if restart_enabled:
+                blender_alive, restarted = supervisor.ensure_healthy(
+                    checkpoint=checkpoint_path if checkpoint_path.exists() else None
+                )
+                pending_restart_note = pending_restart_note or restarted
+                # A successful restart reopened the checkpoint, so the LIVE scene is
+                # rolled back to the end of the last good round — this round's render
+                # no longer reflects what's in Blender.
+                scene_rolled_back = restarted and blender_alive
+                if not blender_alive:
+                    console.warn("Blender is unavailable and could not be restarted; "
+                                 "finishing with whatever render already exists.")
+
+            # A restart rolled the scene back, so this round's render is stale: don't
+            # bank it as a result (and don't bother gathering it). Record the
+            # interruption and let the agent rebuild from the restored scene next round.
+            if scene_rolled_back:
+                console.warn("scene was rolled back to the last checkpoint; redoing this round.")
+                rounds.append({
+                    "round": n,
+                    "self_score": state.self_score,
+                    "summary": "Blender restarted mid-round; scene rolled back to the last "
+                               "checkpoint and the round will be redone.",
+                    "critic_score": 0,
+                    "satisfied": False,
+                    "issues": [],
+                    "render": None,
+                })
+                if config.budget_usd and total_cost >= config.budget_usd:
+                    outcome = f"stopped: budget reached (spent ${total_cost:.2f} of ${config.budget_usd:.2f})"
+                    console.warn(outcome)
+                    break
+                continue
+
+            # When Blender is dead, use only renders already on disk — never trigger the
+            # out-of-band fallback render, which would block on the dead socket (~300s).
+            images = _gather_images(
+                blender, state, render_path, round_dir, console, allow_fallback=blender_alive
+            )
+
+            # Checkpoint the (healthy) scene so a later crash/hang can resume from here.
+            if blender_alive and stop != "budget":
+                _save_checkpoint(blender, checkpoint_path)
 
             if stop == "budget":
                 # The hard USD cap is reached; don't spend more on a critic pass.
@@ -223,7 +375,9 @@ async def build(config: BotConfig, console: Console) -> RunResult:
                     summary="Stopped before review: USD budget cap reached.",
                 )
             else:
-                digest = _safe_digest(blender)
+                # Skip the scene digest when Blender is dead — it would block on the
+                # socket; the critic can still judge the render we already have.
+                digest = _safe_digest(blender) if blender_alive else ""
                 verdict = await _judge(
                     config, images, digest, round_dir, state, console, transcript,
                     stderr_cb, reference_paths, best_render,
@@ -255,6 +409,13 @@ async def build(config: BotConfig, console: Console) -> RunResult:
                 stale_rounds = 0
             else:
                 stale_rounds += 1
+
+            # Blender is dead and unrecoverable: we've captured this round's render
+            # above, so stop now rather than churn more rounds against a dead socket.
+            if not blender_alive:
+                outcome = "stopped: Blender was unavailable and could not be restarted"
+                console.error(outcome)
+                break
 
             if verdict.satisfied and verdict.score >= config.score_threshold:
                 satisfied = True
@@ -331,6 +492,67 @@ async def build(config: BotConfig, console: Console) -> RunResult:
 # helpers
 # --------------------------------------------------------------------------
 
+async def _collect_user_references(
+    config: BotConfig, reference_dir: Path, console: Console
+) -> list[Path]:
+    """Gather the user's OWN reference images before fetching stock photos.
+
+    Uses CLI-supplied paths (``--ref``) when given; otherwise asks interactively,
+    but only when stdin is a real terminal (so scheduled/piped runs don't block).
+    Returns the files copied into ``reference_dir`` (possibly empty).
+    """
+    if config.ref_paths:
+        images, unusable = resolve_reference_specs(config.ref_paths)
+        for bad in unusable:
+            console.warn(f"--ref ignored (not an image file/folder): {bad}")
+        saved = await asyncio.to_thread(ingest_user_references, images, reference_dir)
+        if saved:
+            console.success(f"using {len(saved)} reference image(s) you provided.")
+        return saved
+    if config.ask_refs and _stdin_is_tty():
+        return await asyncio.to_thread(_prompt_user_references, reference_dir, console)
+    return []
+
+
+def _stdin_is_tty() -> bool:
+    """True only when stdin is an interactive terminal we can safely prompt on."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (ValueError, OSError):
+        return False
+
+
+def _prompt_user_references(reference_dir: Path, console: Console) -> list[Path]:
+    """Ask, on the terminal, for the user's own reference image files (blocking)."""
+    console.info(
+        "Got any reference images for this build? Drag in or paste file paths "
+        "(a folder works too), then press Enter. Blank line = skip / done."
+    )
+    saved: list[Path] = []
+    while True:
+        try:
+            line = input("  reference> ").strip()
+        except EOFError:
+            break
+        if not line:
+            break
+        images, unusable = resolve_reference_specs(parse_path_tokens(line))
+        if not images and unusable:
+            # An unquoted path with spaces would split badly — retry the whole line.
+            retry_images, retry_unusable = resolve_reference_specs([line])
+            if retry_images:
+                images, unusable = retry_images, retry_unusable
+        for bad in unusable:
+            console.warn(f"skipped (not an image file/folder): {bad}")
+        if images:
+            new = ingest_user_references(images, reference_dir, start_index=len(saved))
+            saved.extend(new)
+            console.success(f"added {len(new)} image(s) — {len(saved)} reference(s) so far.")
+    if saved:
+        console.info(f"using {len(saved)} of your reference image(s) → {reference_dir}")
+    return saved
+
+
 def _interpret_result(result: RoundResult, console: Console) -> str:
     """Classify a round's ResultMessage: '', 'budget', or 'fatal'."""
     if not result.is_error:
@@ -353,8 +575,13 @@ def _gather_images(
     render_path: Path,
     round_dir: Path,
     console: Console,
+    allow_fallback: bool = True,
 ) -> list[Path]:
-    """Find renders this round; fall back to an out-of-band render if needed."""
+    """Find renders this round; fall back to an out-of-band render if needed.
+
+    ``allow_fallback=False`` skips the out-of-band render entirely (used when Blender
+    is known dead, so we don't block on the socket) — only on-disk renders are used.
+    """
     candidates: list[Path] = []
     if state.render_path:
         p = Path(state.render_path)
@@ -372,6 +599,10 @@ def _gather_images(
         if key not in seen and p.exists():
             seen.add(key)
             images.append(p)
+
+    if not images and not allow_fallback:
+        console.warn("no render found this round and Blender is unavailable — skipping fallback render.")
+        return images
 
     if not images:
         console.warn("no render found this round — taking a fallback render of the scene.")
@@ -393,6 +624,18 @@ def _safe_digest(blender: BlenderClient) -> str:
         return blender.scene_digest()
     except BlenderUnavailable:
         return ""
+
+
+def _save_checkpoint(blender: BlenderClient, path: Path) -> bool:
+    """Best-effort out-of-band save so a later restart can resume from here.
+
+    Silent on success (it runs every round); a failure just means the previous
+    checkpoint stands. Never raises.
+    """
+    try:
+        return blender.save_blend(str(path))
+    except BlenderUnavailable:
+        return False
 
 
 async def _judge(

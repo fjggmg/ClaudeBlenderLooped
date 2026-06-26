@@ -1,7 +1,37 @@
 import os
 import unittest
 
-from blendahbot.discovery import find_blender_mcp_command, find_claude_cli, DiscoveryError
+from blendahbot.discovery import (
+    DiscoveryError,
+    find_blender_executable,
+    find_blender_mcp_command,
+    find_claude_cli,
+)
+
+
+class FindBlenderExecutableTests(unittest.TestCase):
+    def test_override_existing_file_wins(self):
+        # Use this test file itself as a stand-in "executable".
+        here = os.path.abspath(__file__)
+        self.assertEqual(find_blender_executable(here), here)
+
+    def test_env_var_existing_file(self):
+        here = os.path.abspath(__file__)
+        os.environ["BLENDAHBOT_BLENDER"] = here
+        try:
+            self.assertEqual(find_blender_executable(), here)
+        finally:
+            del os.environ["BLENDAHBOT_BLENDER"]
+
+    def test_bogus_override_is_not_returned(self):
+        bogus = r"Z:\does\not\exist\blender.exe"
+        try:
+            result = find_blender_executable(bogus)
+            # If Blender is installed on this machine it returns that real path —
+            # but never the bogus one we passed.
+            self.assertNotEqual(result, bogus)
+        except DiscoveryError:
+            pass
 
 
 class FindBlenderMcpTests(unittest.TestCase):

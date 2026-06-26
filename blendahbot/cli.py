@@ -41,8 +41,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-steer", action="store_true", help="Disable live steering (don't read stdin for mid-build instructions).")
     p.add_argument("--refs", type=int, default=None, help="Reference photos to fetch up front to ground the build (default: 6).")
     p.add_argument("--no-refs", action="store_true", help="Don't fetch reference images.")
+    p.add_argument("--ref", action="append", default=None, metavar="PATH", help="Your own reference image or folder to ground the build (repeatable). Skips the interactive 'got references?' prompt.")
+    p.add_argument("--no-ask-refs", action="store_true", help="Don't interactively ask whether you have your own reference images.")
+    p.add_argument("--no-addons", action="store_true", help="Forbid the builder from downloading/installing Blender extensions, add-ons, asset libraries, or Python packages on demand.")
     p.add_argument("--blender-host", default=None, help="Blender add-on host (default: localhost).")
     p.add_argument("--blender-port", type=int, default=None, help="Blender add-on port (default: 9876).")
+    p.add_argument("--blender-path", default=None, help="Path to the Blender executable to auto-open (default: auto-detect, then remembered).")
+    p.add_argument("--no-auto-blender", action="store_true", help="Don't auto-open Blender if it isn't running.")
+    p.add_argument("--no-auto-restart", action="store_true", help="Don't auto-restart Blender if it crashes or stops responding mid-build.")
     p.add_argument("--allow-no-blender", action="store_true", help="Proceed even if Blender is unreachable at start.")
     p.add_argument("--plain", action="store_true", help="Plain text output (no colour/panels).")
     p.add_argument("--verbose", action="store_true", help="Show CLI stderr and extra detail.")
@@ -66,6 +72,7 @@ def _config_from_args(args: argparse.Namespace, request: str) -> BotConfig:
         "score_threshold": args.threshold,
         "blender_host": args.blender_host,
         "blender_port": args.blender_port,
+        "blender_path": args.blender_path,
         "plain": args.plain or None,
         "verbose": args.verbose or None,
         "refs": args.refs,
@@ -80,6 +87,16 @@ def _config_from_args(args: argparse.Namespace, request: str) -> BotConfig:
         overrides["steer"] = False
     if args.no_refs:
         overrides["refs"] = 0
+    if args.ref:
+        overrides["ref_paths"] = args.ref
+    if args.no_ask_refs:
+        overrides["ask_refs"] = False
+    if args.no_addons:
+        overrides["addons"] = False
+    if args.no_auto_blender:
+        overrides["auto_launch_blender"] = False
+    if args.no_auto_restart:
+        overrides["auto_restart_blender"] = False
     if args.allow_no_blender:
         overrides["require_blender"] = False
     return BotConfig.from_env(request, **overrides)

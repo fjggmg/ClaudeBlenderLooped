@@ -58,11 +58,39 @@ class BotConfig:
     blender_mcp_cmd: list[str] | None = None
     require_blender: bool = True
 
+    # Auto-launch: if Blender isn't reachable at preflight, open it ourselves.
+    # blender_path is the executable to open (None = auto-detect, and we remember
+    # what we find). blender_launch_timeout bounds how long we wait for it to boot
+    # and bring its add-on server up.
+    auto_launch_blender: bool = True
+    blender_path: str | None = None
+    blender_launch_timeout: float = 90.0
+
+    # Auto-restart: if Blender crashes or stops responding mid-build, kill the
+    # stale instance and relaunch it (reopening the last checkpoint .blend so work
+    # isn't lost). blender_health_timeout bounds the between-rounds liveness probe
+    # used to detect a hang; blender_restart_attempts caps recovery tries per stall.
+    auto_restart_blender: bool = True
+    blender_health_timeout: float = 8.0
+    blender_restart_attempts: int = 2
+
     # Reference images downloaded up front to ground the build (0 disables).
     refs: int = 6
 
+    # Let the builder download + install Blender extensions/add-ons, asset libraries
+    # and Python packages on demand (via `python -m blendahbot.addons`). On by default;
+    # turn off to forbid autonomous installation of third-party code.
+    addons: bool = True
+
     # Interaction.
     steer: bool = True
+
+    # Ask the user (interactively) whether they have their own reference images
+    # before building. Skipped automatically when stdin isn't a terminal.
+    ask_refs: bool = True
+    # Reference image files/folders supplied non-interactively (e.g. CLI --ref).
+    # When set, the interactive prompt is skipped.
+    ref_paths: list[str] = field(default_factory=list)
 
     # Presentation.
     plain: bool = False
@@ -110,7 +138,15 @@ class BotConfig:
             kwargs["model"] = v
         if (v := os.environ.get("BLENDAHBOT_OUT")):
             kwargs["out_root"] = Path(v)
+        if (v := os.environ.get("BLENDAHBOT_BLENDER")):
+            kwargs["blender_path"] = v
+        if os.environ.get("BLENDAHBOT_NO_AUTO_BLENDER"):
+            kwargs["auto_launch_blender"] = False
+        if os.environ.get("BLENDAHBOT_NO_AUTO_RESTART"):
+            kwargs["auto_restart_blender"] = False
         if os.environ.get("BLENDAHBOT_VET_ASSETS"):
             kwargs["vet_assets"] = True
+        if os.environ.get("BLENDAHBOT_NO_ADDONS"):
+            kwargs["addons"] = False
         kwargs.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**kwargs)  # type: ignore[arg-type]

@@ -14,7 +14,8 @@ from pathlib import Path
 # Settings keys that map directly onto BotConfig fields.
 _CONFIG_KEYS = (
     "budget_usd", "model", "score_threshold", "max_rounds", "patience", "refs",
-    "use_critic", "steer",
+    "ask_refs", "use_critic", "steer", "addons", "auto_launch_blender",
+    "auto_restart_blender", "blender_path",
 )
 
 # (key, label, kind) in menu order. kind drives parsing/formatting.
@@ -26,8 +27,13 @@ _MENU = [
     ("max_rounds", "Max rounds (blank = unlimited)", "int_or_none"),
     ("patience", "Stop after N rounds with no improvement (0 = never)", "int"),
     ("refs", "Reference images to fetch (0 = off)", "int"),
+    ("ask_refs", "Ask if I have my own reference images", "bool"),
     ("use_critic", "Independent critic", "bool"),
     ("steer", "Live steering", "bool"),
+    ("addons", "Auto-download/install add-ons, asset libraries & Python packages", "bool"),
+    ("auto_launch_blender", "Auto-open Blender if it isn't running", "bool"),
+    ("auto_restart_blender", "Auto-restart Blender if it crashes or hangs mid-build", "bool"),
+    ("blender_path", "Blender executable path (blank = auto-detect)", "str"),
 ]
 
 
@@ -71,6 +77,20 @@ def config_overrides(data: dict) -> dict:
     return {k: data[k] for k in _CONFIG_KEYS if data.get(k) is not None}
 
 
+def remember_blender_path(path: str) -> bool:
+    """Persist a discovered Blender path so we don't have to find it again.
+
+    Only writes if no path is already saved (so we never clobber a user's choice).
+    Returns ``True`` if it saved a new value, ``False`` if one was already set.
+    """
+    data = load_settings()
+    if data.get("blender_path"):
+        return False
+    data["blender_path"] = str(path)
+    save_settings(data)
+    return True
+
+
 # --------------------------------------------------------------------------
 # interactive editor
 # --------------------------------------------------------------------------
@@ -80,7 +100,13 @@ def _fmt(data: dict, field: str, kind: str) -> str:
     if kind == "secret":
         return f"set (…{str(value)[-4:]})" if value else "(not set — using subscription login)"
     if value is None:
-        return "unlimited" if field == "max_rounds" else "(default)"
+        if field == "max_rounds":
+            return "unlimited"
+        if field == "blender_path":
+            return "(auto-detect)"
+        if field in ("auto_launch_blender", "auto_restart_blender", "addons"):
+            return "on (default)"
+        return "(default)"
     if kind == "bool":
         return "on" if value else "off"
     return str(value)

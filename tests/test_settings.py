@@ -51,6 +51,19 @@ class SettingsTests(unittest.TestCase):
         settings.apply_to_env({})
         self.assertIsNone(os.environ.get("ANTHROPIC_API_KEY"))
 
+    def test_config_overrides_includes_blender_keys(self):
+        d = {"auto_launch_blender": False, "blender_path": r"C:\b\blender.exe"}
+        self.assertEqual(settings.config_overrides(d), d)
+
+    def test_remember_blender_path_saves_when_unset(self):
+        self.assertTrue(settings.remember_blender_path(r"C:\b\blender.exe"))
+        self.assertEqual(settings.load_settings()["blender_path"], r"C:\b\blender.exe")
+
+    def test_remember_blender_path_does_not_clobber(self):
+        settings.save_settings({"blender_path": r"C:\chosen\blender.exe"})
+        self.assertFalse(settings.remember_blender_path(r"C:\other\blender.exe"))
+        self.assertEqual(settings.load_settings()["blender_path"], r"C:\chosen\blender.exe")
+
 
 if __name__ == "__main__":
     unittest.main()

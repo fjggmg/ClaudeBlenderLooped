@@ -627,14 +627,18 @@ A generated mesh is unpredictable: wrong object, blobby/holed/melted geometry, a
 SCENE instead of one prop, garbled/seam-ripped texture, or wrong proportions. NEVER import one
 blind — look at it ALONE first, then ACCEPT / REGENERATE / FALL BACK.
 
-Easiest — let gen3d render the isolated contact sheet for you:
+The `--preview` flag renders the mesh from several angles in a SEPARATE, throwaway headless Blender
+(`blender --background`) — it never touches your live session (can't disturb your scene or be
+disturbed by it), needs no add-on, and is fast (~5s):
 ```
 python -m blendahbot.gen3d "weathered oak barrel, iron hoops" --out assets/barrel.glb --preview <round_dir>/preview
 ```
-It writes the GLB, then renders the mesh ALONE from several angles into `<round_dir>/preview/`
-(a throwaway Blender scene — your live scene is untouched) and prints the PNG paths. To preview a
-mesh you ALREADY have (a CC0 download, or a --compare candidate):
-`python -m blendahbot.gen3d.preview assets/barrel.glb --out <round_dir>/preview`.
+It writes the GLB, renders `shot_*.png` into `<round_dir>/preview/`, and prints their paths. To
+preview a mesh you ALREADY have (a CC0 download or a `--compare` candidate):
+`python -m blendahbot.gen3d.preview assets/barrel.glb --out <round_dir>/preview` (auto-detects
+blender.exe; set BLENDAHBOT_BLENDER or pass `--blender <path>` if it can't find it). Do NOT preview
+by importing the GLB through execute_blender_code into your LIVE scene — a heavy glTF import through
+the live add-on can crash it; the headless `--preview` avoids that entirely.
 
 Then READ every `shot_*.png` and judge with this checklist — REJECT if any is true:
 - not clearly the requested object / unrecognizable
@@ -656,74 +660,6 @@ Want an INDEPENDENT judge to do this automatically? Add `--vet` (it renders the 
 separate critic score it, and auto-regenerates a bad asset, keeping the best):
 `python -m blendahbot.gen3d "..." --out assets/x.glb --vet`. It still prints the final GLB path to
 stdout; a `[gen3d] UNVETTED ...` line on stderr means even the best attempt was poor — then fall back.
-
-## Inline preview snippet (preview ANY glb within your own bpy flow)
-Renders a GLB alone in a TEMPORARY scene and tears it down, leaving the live scene byte-for-byte
-unchanged. KEY RULES (verified on 5.1.2): build via the bpy.data API (operators mutate the active
-scene); render the temp scene with `render(scene=preview.name)` (do NOT swap `window.scene`); on
-cleanup remove ONLY the datablocks you created — NEVER `bpy.data.orphans_purge()` (it deletes the
-user's pre-existing orphans and flips the active object).
-```python
-import bpy, math, os
-from mathutils import Vector
-
-def preview_glb_isolated(glb_path, out_dir, target=2.0, res=(480, 480),
-                         shots=(("front",0,12),("side",90,8),("back_3q",150,18),("high",40,38))):
-    os.makedirs(out_dir, exist_ok=True)
-    win = bpy.context.window
-    kinds = ("objects","meshes","materials","images","cameras","lights","collections","worlds")
-    snap = lambda: {k: set(d.name_full for d in getattr(bpy.data, k)) for k in kinds}
-    before = snap()
-    sc = bpy.data.scenes.new("BB_Preview"); w = bpy.data.worlds.new("BB_PreviewWorld")
-    w.use_nodes = True
-    bg = w.node_tree.nodes.get("Background")
-    if bg: bg.inputs[0].default_value = (0.18, 0.18, 0.19, 1.0)
-    sc.world = w; paths = []
-    try:
-        with bpy.context.temp_override(window=win, scene=sc, view_layer=sc.view_layers[0],
-                                       collection=sc.collection):
-            bpy.ops.import_scene.gltf(filepath=glb_path, import_scene_as_collection=False)
-        new = [bpy.data.objects[n] for n in (snap()["objects"] - before["objects"])]
-        meshes = [o for o in new if o.type == "MESH"]
-        if not meshes: raise RuntimeError("import produced no mesh")
-        bpy.context.view_layer.update()
-        cs = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
-        mn = Vector((min(c.x for c in cs), min(c.y for c in cs), min(c.z for c in cs)))
-        mx = Vector((max(c.x for c in cs), max(c.y for c in cs), max(c.z for c in cs)))
-        longest = max(mx - mn) or 1.0; center = (mn + mx) / 2
-        for o in meshes: o.location -= center; o.scale *= target / longest
-        bpy.context.view_layer.update()
-        cs = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
-        bcen = sum(cs, Vector()) / len(cs); radius = max((c - bcen).length for c in cs) or 1.0
-        cd = bpy.data.cameras.new("BB_PCam"); cam = bpy.data.objects.new("BB_PCam", cd)
-        sc.collection.objects.link(cam); sc.camera = cam
-        ld = bpy.data.lights.new("BB_PSun", "SUN"); ld.energy = 3.5
-        key = bpy.data.objects.new("BB_PSun", ld); sc.collection.objects.link(key)
-        key.rotation_euler = (math.radians(55), math.radians(15), math.radians(40))
-        pr = sc.render; pr.engine = "BLENDER_EEVEE"; pr.resolution_x, pr.resolution_y = res
-        pr.image_settings.file_format = "PNG"
-        hfov = 2*math.atan((cd.sensor_width/2)/cd.lens); vfov = 2*math.atan(math.tan(hfov/2)/(res[0]/res[1]))
-        dist = (radius*1.3)/math.sin(min(hfov, vfov)/2); cd.clip_end = dist*100
-        for label, az, el in shots:
-            a, e = math.radians(az), math.radians(el)
-            cam.location = bcen + Vector((dist*math.cos(e)*math.sin(a), -dist*math.cos(e)*math.cos(a), dist*math.sin(e)))
-            cam.rotation_euler = (bcen - cam.location).to_track_quat("-Z","Y").to_euler()
-            p = os.path.join(out_dir, "shot_%s.png" % label).replace("\\\\", "/")
-            pr.filepath = p; bpy.ops.render.render(write_still=True, scene=sc.name); paths.append(p)
-        return paths
-    finally:
-        after = snap()
-        if win is None or win.scene is not sc: bpy.data.scenes.remove(sc, do_unlink=True)
-        for k in ("objects","collections","meshes","cameras","lights","materials","images","worlds"):
-            coll = getattr(bpy.data, k)
-            for n in (after.get(k, set()) - before.get(k, set())):
-                d = coll.get(n)
-                if d is None: continue
-                try:
-                    if k == "objects" or d.users == 0: coll.remove(d)
-                except (ReferenceError, RuntimeError): pass
-# Then Read each shot_*.png and decide accept / regenerate / fall back.
-```
 
 ## bpy snippet
 ```python
@@ -865,11 +801,18 @@ For a terrain, sample positions on its surface (or use Geometry Nodes "Distribut
 Faces"); space big objects out (poisson/grid jitter) so they don't overlap.
 
 ## Per-variant techniques (to build the pool / add more variety)
-1. PROCEDURAL with a different SEED per instance — best variation. Trees: enable the bundled
-   Sapling add-on and vary the seed.
+1. PROCEDURAL with a different SEED per instance — best variation. Trees: enable the Sapling
+   add-on and vary the seed. In Blender 5.x Sapling ships as the EXTENSION
+   `bl_ext.blender_org.sapling_tree_gen` (the legacy `add_curve_sapling_3` module name is gone),
+   so try the new name first and fall back; if it isn't installed, fetch it on demand (see the
+   `acquire-extensions-and-libraries` skill: `python -m blendahbot.addons install sapling_tree_gen`).
    ```python
    import bpy
-   bpy.ops.preferences.addon_enable(module="add_curve_sapling_3")
+   for _m in ("bl_ext.blender_org.sapling_tree_gen", "add_curve_sapling_3", "add_curve_sapling"):
+       try:
+           bpy.ops.preferences.addon_enable(module=_m); break   # the one that exists wins
+       except Exception:
+           continue
    for i, loc in enumerate(positions):
        bpy.ops.curve.tree_add(do_update=True, seed=i, bevel=True, prune=False, leaves=150)
        t = bpy.context.active_object; t.location = loc      # different seed -> different tree
@@ -931,6 +874,76 @@ def array_along(obj, count, dx=0.0, dy=0.0, dz=0.0):
 
 ## Validated result
 Array props are standard 5.1. Pending in-scene render validation -> confidence medium."""),
+
+    ("acquire-extensions-and-libraries",
+     "When the build needs a capability base Blender lacks — a tree/scatter/CAD/format add-on, an "
+     "importer/exporter, a node or shader pack, an asset library to drag from, or a Python package "
+     "your bpy code imports. Download + install it into THIS session, on demand.",
+     "high",
+     """# Acquire Extensions, Add-ons, Asset Libraries & Python Packages (on demand)
+
+## When to use
+Whenever the task needs something the base Blender install doesn't have — a procedural tree or
+scatter generator, a STEP/CAD or other format importer, a node/shader pack, an asset library to
+pull pre-made props from, or a Python package (`trimesh`, `shapely`, `scipy`, …) you want to
+`import` from bpy. You are NOT limited to what ships with Blender: fetch the capability, then use
+it. Everything installs into the LIVE session, so new operators/panels/modules work immediately.
+
+## The tool (preferred — one tested command each)
+```
+python -m blendahbot.addons search "tree generator"      # find extensions on extensions.blender.org
+python -m blendahbot.addons install sapling_tree_gen      # by extension id (exact)
+python -m blendahbot.addons install "scatter objects"     # or let it best-match a query
+python -m blendahbot.addons install-url https://host/some_addon.zip   # trusted sources only
+python -m blendahbot.addons enable bl_ext.blender_org.node_wrangler    # turn on an installed/bundled module
+python -m blendahbot.addons list                          # what's already enabled
+python -m blendahbot.addons asset-library "C:/packs/kit" --name Kit    # register an asset-library folder
+python -m blendahbot.addons pip trimesh shapely           # into Blender's OWN Python (bpy can import it)
+```
+- `install` prints the enabled MODULE NAME (e.g. `bl_ext.user_default.sapling_tree_gen`). The
+  add-on's operators/panels are live right away — call them via `bpy.ops...` or its N-panel.
+- `install` is key-free and only pulls from the official, vetted Extensions Platform. It
+  short-circuits (no duplicate) if the extension is already enabled. `install-url` runs arbitrary
+  third-party code, so point it only at sources you trust.
+- `pip` targets Blender's bundled interpreter via `--user`, so a freshly installed package is
+  importable from `execute_blender_code` immediately — not the project venv.
+
+## Inline bpy fallback (when you'd rather install within your own bpy flow)
+CRITICAL: over the MCP `execute_blender_code` path `sys.stdout` is None, so a third-party add-on
+that `print()`s inside its `register()` will CRASH mid-registration. ALWAYS redirect stdout to a
+real buffer around the install/enable, or the add-on installs half-registered and broken:
+```python
+import bpy, sys, io
+def install_extension_zip(zip_path, repo="user_default"):
+    so, se = sys.stdout, sys.stderr; sys.stdout = sys.stderr = io.StringIO()  # see CRITICAL above
+    before = set(bpy.context.preferences.addons.keys())
+    try:
+        bpy.ops.extensions.package_install_files(
+            filepath=zip_path, repo=repo, enable_on_install=True, overwrite=True)
+    finally:
+        sys.stdout, sys.stderr = so, se
+    return sorted(set(bpy.context.preferences.addons.keys()) - before)   # ['bl_ext.user_default.<id>']
+# Online by id (needs use_online_access + a synced repo):
+#   bpy.ops.extensions.repo_refresh_all()
+#   bpy.ops.extensions.package_install(repo_index=<i of 'blender_org'>, pkg_id="<id>", enable_on_install=True)
+# Legacy .py/.zip add-on (not an Extensions-Platform package):
+#   bpy.ops.preferences.addon_install(filepath=..., overwrite=True); bpy.ops.preferences.addon_enable(module=...)
+```
+
+## Gotchas
+- The stdout-None print crash above is the #1 trap — prefer the `blendahbot.addons` CLI (it bakes
+  the redirect in), or wrap your own call exactly as shown.
+- Module naming: an Extensions-Platform add-on enables as `bl_ext.<repo>.<id>` (repo = `blender_org`
+  for online installs, `user_default` for local-file installs) — NOT the bare id. Check with `list`.
+- In Blender 5.x several once-bundled add-ons are now extensions (e.g. Sapling =
+  `bl_ext.blender_org.sapling_tree_gen`); if `addon_enable` fails on a legacy name, `install` it.
+- Online install needs `preferences.system.use_online_access = True` (on by default here).
+- Don't reinstall what's already there — run `list` (or `install`, which auto-skips duplicates).
+
+## Validated result
+package_install_files / package_install / addon_install / asset_library_add signatures and the
+`bl_ext.<repo>.<id>` module naming verified live on Blender 5.1.2, including the stdout-redirect
+fix for register() prints. confidence high."""),
 ]
 
 

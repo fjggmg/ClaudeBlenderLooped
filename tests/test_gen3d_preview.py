@@ -1,30 +1,36 @@
 import json
+import subprocess
 import tempfile
 import unittest
-from pathlib import Path
+from unittest import mock
 
+from blendahbot.discovery import DiscoveryError
+from blendahbot.gen3d import preview
 from blendahbot.gen3d.preview import (
     AssetStats,
     _parse_shot_arg,
-    build_preview_program,
     heuristic_floor,
     parse_preview_stats,
     render_isolated_preview,
 )
 
-from tests.test_blender_protocol import FakeBlender
-from blendahbot.blender import BlenderClient
-
 
 def _manifest_stdout(**over) -> str:
     m = {
         "shots": ["/tmp/preview/shot_front.png", "/tmp/preview/shot_side.png"],
-        "object_count": 1, "mesh_count": 1, "face_count": 1200,
+        "object_count": 2, "mesh_count": 1, "face_count": 1200,
         "has_materials": True, "has_uvs": True, "texture_count": 1,
-        "max_texture_px": 2048, "longest_dim": 1.42, "bbox_aspect": 2.1,
+        "max_texture_px": 2048, "longest_dim": 1.42, "bbox_aspect": 2.1, "engine": "BLENDER_EEVEE",
     }
     m.update(over)
-    return "BB_PREVIEW=" + json.dumps(m) + "\nBB_PREVIEW_OK\n"
+    return "some blender startup noise\nBB_PREVIEW=" + json.dumps(m) + "\nBB_PREVIEW_OK\n"
+
+
+class _Proc:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
 
 
 class ParsePreviewStatsTests(unittest.TestCase):
@@ -73,8 +79,8 @@ class HeuristicFloorTests(unittest.TestCase):
         self.assertTrue(any("aspect" in r for r in reasons))
 
     def test_missing_material_when_texture_wanted(self):
-        ok, reasons = heuristic_floor(AssetStats(mesh_count=1, face_count=900, has_materials=False),
-                                      want_texture=True)
+        ok, _ = heuristic_floor(AssetStats(mesh_count=1, face_count=900, has_materials=False),
+                                want_texture=True)
         self.assertFalse(ok)
         ok2, _ = heuristic_floor(AssetStats(mesh_count=1, face_count=900, has_materials=False),
                                  want_texture=False)
@@ -86,57 +92,60 @@ class HeuristicFloorTests(unittest.TestCase):
         self.assertTrue(reasons)
 
 
-class BuildPreviewProgramTests(unittest.TestCase):
-    def test_embeds_glb_and_isolation_sentinels(self):
-        code = build_preview_program("C:/assets/barrel.glb", "C:/out/preview", shots=[["front", 0, 12]])
-        # the GLB path is embedded (forward-slashed)
-        self.assertIn("barrel.glb", code)
-        # isolation primitives
-        self.assertIn("BB_Gen3DPreview", code)
-        self.assertIn("temp_override", code)
-        self.assertIn("scene=preview.name", code)  # renders the NON-active scene
-        self.assertIn("BB_PREVIEW_OK", code)
-        # the shot we passed reached the program header
-        self.assertIn('"front"', code)
+class PreviewCommandTests(unittest.TestCase):
+    def test_command_shape(self):
+        cmd = preview._preview_command("blender.exe", "scr.py", "C:/assets/barrel.glb", "C:/out",
+                                       480, "BLENDER_EEVEE", 2.0, [["front", 0, 12]])
+        self.assertIn("--background", cmd)
+        self.assertIn("--factory-startup", cmd)  # don't load the live session's add-on/prefs
+        self.assertIn("--python", cmd)
+        self.assertIn("scr.py", cmd)
+        joined = " ".join(cmd)
+        self.assertIn("barrel.glb", joined)
+        self.assertIn('"front"', joined)  # shots arrive as a JSON arg
 
-    def test_never_uses_orphans_purge(self):
-        code = build_preview_program("a.glb", "out", shots=[["front", 0, 12]])
-        self.assertNotIn("orphans_purge", code)
+    def test_script_is_isolated_and_sane(self):
+        # Headless = fresh process, so no temp-scene/teardown dance and never a global purge.
+        self.assertIn("import_scene.gltf", preview._PREVIEW_SCRIPT)
+        self.assertIn("BB_PREVIEW_OK", preview._PREVIEW_SCRIPT)
+        self.assertNotIn("orphans_purge", preview._PREVIEW_SCRIPT)
 
 
 class RenderIsolatedPreviewTests(unittest.TestCase):
+    def _run(self, proc=None, side_effect=None, find=("ok", "blender.exe")):
+        find_kw = {"return_value": find[1]} if find[0] == "ok" else {"side_effect": find[1]}
+        run_kw = {"side_effect": side_effect} if side_effect else {"return_value": proc}
+        with mock.patch.object(preview, "find_blender_executable", **find_kw), \
+             mock.patch.object(preview.subprocess, "run", **run_kw), \
+             tempfile.TemporaryDirectory() as d:
+            return render_isolated_preview("a.glb", d)
+
     def test_ok_path_parses_stats(self):
-        fake = FakeBlender({"status": "ok", "stdout": _manifest_stdout()})
-        try:
-            with tempfile.TemporaryDirectory() as d:
-                client = BlenderClient("localhost", fake.port, timeout=5)
-                result = render_isolated_preview(client, "a.glb", d)
-        finally:
-            fake.close()
+        result = self._run(proc=_Proc(stdout=_manifest_stdout()))
         self.assertTrue(result.ok)
         self.assertIsNotNone(result.stats)
         self.assertEqual(result.stats.mesh_count, 1)
-        # the executed code carried the render program
-        self.assertIn("BB_Gen3DPreview", fake.requests[0]["code"])
+        self.assertEqual(result.engine, "BLENDER_EEVEE")
 
-    def test_error_status_returns_not_ok(self):
-        fake = FakeBlender({"status": "error", "message": "import failed: bad glb"})
-        try:
-            with tempfile.TemporaryDirectory() as d:
-                client = BlenderClient("localhost", fake.port, timeout=5)
-                result = render_isolated_preview(client, "a.glb", d)
-        finally:
-            fake.close()
+    def test_blender_not_found(self):
+        result = self._run(find=("err", DiscoveryError("no blender installed")))
         self.assertFalse(result.ok)
-        self.assertIn("bad glb", result.detail)
+        self.assertIn("no blender installed", result.detail)
 
-    def test_dropped_connection_tolerated(self):
-        # Port 1 is never open -> transport error -> ok=False, no raise.
-        with tempfile.TemporaryDirectory() as d:
-            client = BlenderClient("localhost", 1, timeout=2)
-            result = render_isolated_preview(client, "a.glb", d)
+    def test_import_error_reported(self):
+        result = self._run(proc=_Proc(stdout="BB_PREVIEW_ERR glTF import produced no mesh", returncode=2))
         self.assertFalse(result.ok)
-        self.assertTrue(result.detail)
+        self.assertIn("no mesh", result.detail)
+
+    def test_timeout_tolerated(self):
+        result = self._run(side_effect=subprocess.TimeoutExpired(cmd="blender", timeout=1))
+        self.assertFalse(result.ok)
+        self.assertIn("timed out", result.detail)
+
+    def test_launch_failure_tolerated(self):
+        result = self._run(side_effect=OSError("exec format error"))
+        self.assertFalse(result.ok)
+        self.assertIn("could not launch", result.detail)
 
 
 class ParseShotArgTests(unittest.TestCase):
