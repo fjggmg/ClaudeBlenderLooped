@@ -297,6 +297,66 @@ def recessed_panel(obj, G, thickness_mult=0.3, depth_mult=-0.05):
 ## Validated result
 Standard 5.1 operator args. Pending in-scene render validation -> confidence medium."""),
 
+    ("gen3d-import-and-place",
+     "Organic / detail-dense props (barrels, statues, creatures, plants, furniture) — AI-generate the mesh instead of hand-modelling.",
+     "high",
+     """# Generate & Import a 3D Asset (AI-generated mesh)
+
+## When to use
+For a single ORGANIC or detail-dense prop with no good CC0: barrels, statues, busts,
+creatures, plants, furniture, characters, weapons, food, ornaments. Prefer this over
+hand-modelling such shapes (LLM hand-modelling is weak at them). For hard-surface
+vehicles/buildings/panels, hand-model/kitbash instead; for assets that already exist as
+CC0, download via `blendahbot.assets`. Image->3D from a downloaded reference photo is best.
+
+## Steps
+1. Optionally get a reference image (`blendahbot.refs --url ...` or a downloaded photo).
+2. Generate:
+   `python -m blendahbot.gen3d "a weathered wooden barrel" --image reference/barrel.png --out assets/barrel.glb`
+   (prints the GLB path to stdout; needs the local Hunyuan3D server running OR TRIPO_API_KEY).
+3. Import + place with the snippet below.
+4. If it imported geometry-only (no materials), UV-unwrap and apply a PolyHaven PBR set
+   (see pbr-material-from-polyhaven), then light and frame as usual.
+
+## bpy snippet
+```python
+import bpy
+from mathutils import Vector
+
+def import_and_place(glb_path, target_size=1.0, floor_z=0.0, name=None):
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=glb_path)
+    meshes = [o for o in bpy.data.objects if o not in before and o.type == 'MESH']
+    if not meshes:
+        raise RuntimeError("import produced no mesh")
+    bpy.ops.object.select_all(action='DESELECT')
+    for o in meshes: o.select_set(True)
+    bpy.context.view_layer.objects.active = meshes[0]
+    if len(meshes) > 1: bpy.ops.object.join()
+    obj = bpy.context.view_layer.objects.active
+    if name: obj.name = name
+    bpy.context.view_layer.update()
+    longest = max(obj.dimensions) or 1.0          # gen meshes import at arbitrary scale
+    obj.scale *= (target_size / longest)
+    bpy.ops.object.transform_apply(scale=True)
+    bpy.context.view_layer.update()
+    corners = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+    obj.location.z += floor_z - min(v.z for v in corners)   # drop to floor
+    bpy.ops.object.shade_smooth()
+    has_mats = bool(obj.data.materials) and any(obj.data.materials)
+    return obj, has_mats
+```
+
+## Gotchas
+- Generated meshes import at ARBITRARY scale — always normalize to a real size (a barrel ~0.9 m,
+  not 40 m) and DROP TO FLOOR, or it floats / dwarfs the scene.
+- glTF auto-builds a Principled BSDF from PBR maps; if has_mats is False, apply a PolyHaven PBR set.
+- Vary instances (different --seed / --image) so multiple props aren't identical (see varied-instances).
+- Generation replaces MODELLING, not the rest — still ground, scale, light, and frame it.
+
+## Validated result
+import_scene.gltf + join/normalize/ground are standard 5.1. confidence medium."""),
+
     ("grounding-and-assembly",
      "EVERY multi-part build. Stops the #1 failure: primitives floating and not connected.",
      "high",
