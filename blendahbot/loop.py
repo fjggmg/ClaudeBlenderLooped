@@ -226,7 +226,7 @@ async def build(config: BotConfig, console: Console) -> RunResult:
                 digest = _safe_digest(blender)
                 verdict = await _judge(
                     config, images, digest, round_dir, state, console, transcript,
-                    stderr_cb, reference_paths,
+                    stderr_cb, reference_paths, best_render,
                 )
             last_verdict = verdict
             total_cost += verdict.cost_usd  # the critic costs money too
@@ -405,6 +405,7 @@ async def _judge(
     transcript: Transcript,
     stderr_cb,
     reference_paths: list[Path] | None = None,
+    prev_render: Path | None = None,
 ) -> Verdict:
     if not config.use_critic:
         # Trust the builder's own declaration — but only with a render to show.
@@ -430,10 +431,55 @@ async def _judge(
             suggestions=["Render the scene to the requested path and verify it visually."],
         )
     console.info("handing the render to an independent reviewer…")
-    return await run_critic(
-        config, config.request, images, digest, round_dir, console, transcript,
-        stderr_cb, reference_paths,
+    # Sandbox the critic: copy ONLY the images into a clean review dir it can see,
+    # so it can't read the builder's scripts/logs/self-assessment and be influenced.
+    review_dir = round_dir / "review"
+    clean_images, clean_refs, prev_clean = _prep_review_dir(
+        review_dir, images, reference_paths, prev_render
     )
+    console.info("handing the render to an independent reviewer…")
+    return await run_critic(
+        config, config.request, clean_images, digest, review_dir, console, transcript,
+        stderr_cb, clean_refs, prev_clean,
+    )
+
+
+def _prep_review_dir(
+    review_dir: Path,
+    images: list[Path],
+    reference_paths: list[Path] | None,
+    prev_render: Path | None,
+) -> tuple[list[Path], list[Path], Path | None]:
+    """Copy just the images the critic should see into an isolated review folder."""
+    review_dir.mkdir(parents=True, exist_ok=True)
+    clean_images: list[Path] = []
+    for i, p in enumerate(images):
+        dest = review_dir / f"render_{i:02d}{p.suffix or '.png'}"
+        try:
+            shutil.copy2(p, dest)
+            clean_images.append(dest)
+        except OSError:
+            clean_images.append(p)
+    clean_refs: list[Path] = []
+    for i, p in enumerate(reference_paths or []):
+        src = Path(p)
+        try:
+            dest = review_dir / f"reference_{i:02d}{src.suffix or '.jpg'}"
+            shutil.copy2(src, dest)
+            clean_refs.append(dest)
+        except OSError:
+            pass
+    prev_clean: Path | None = None
+    if prev_render is not None:
+        src = Path(prev_render)
+        if src.exists():
+            try:
+                dest = review_dir / f"previous_best{src.suffix or '.png'}"
+                shutil.copy2(src, dest)
+                prev_clean = dest
+            except OSError:
+                prev_clean = None
+    return clean_images, clean_refs, prev_clean
 
 
 def _report_verdict(verdict: Verdict, console: Console) -> None:

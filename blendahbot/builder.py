@@ -218,7 +218,11 @@ def _brief_result(content) -> str:
 # --------------------------------------------------------------------------
 
 def _critic_prompt(
-    request: str, image_paths: list[Path], scene_digest: str, reference_paths: list[Path] | None = None
+    request: str,
+    image_paths: list[Path],
+    scene_digest: str,
+    reference_paths: list[Path] | None = None,
+    previous_path: Path | None = None,
 ) -> str:
     images = "\n".join(f"  - {p}" for p in image_paths) or "  (no render available)"
     digest = scene_digest.strip() or "(scene summary unavailable)"
@@ -229,17 +233,26 @@ def _critic_prompt(
             "\nReference photos of the intended subject (approximate real-world examples — "
             "Read these too and compare the render against them):\n" + ref_list + "\n"
         )
+    prev = ""
+    if previous_path:
+        prev = (
+            "\nPrevious best render of this same project (Read it and compare):\n"
+            f"  - {previous_path}\n"
+            "If the CURRENT render is WORSE than this previous one in any way, its score MUST "
+            "be LOWER than you would have given the previous render, and say so explicitly. "
+            "Regressions are punished, not excused.\n"
+        )
     return f"""\
 Original request:
 
     {request}
 
-Scene summary:
+Scene summary (factual object list from Blender — judge the PIXELS, not these labels):
 {digest}
 
 Render(s) to review (use the Read tool to open and look at each image file):
 {images}
-{refs}
+{refs}{prev}
 Now evaluate and reply with the strict JSON verdict described in your instructions.
 """
 
@@ -254,9 +267,10 @@ async def run_critic(
     transcript: Transcript,
     stderr_cb,
     reference_paths: list[Path] | None = None,
+    previous_path: Path | None = None,
 ) -> Verdict:
     options = build_critic_options(config, work_dir, stderr_cb)
-    prompt = _critic_prompt(request, image_paths, scene_digest, reference_paths)
+    prompt = _critic_prompt(request, image_paths, scene_digest, reference_paths, previous_path)
     chunks: list[str] = []
     err = ""
     cost = 0.0

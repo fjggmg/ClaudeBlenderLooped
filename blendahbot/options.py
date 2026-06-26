@@ -82,18 +82,23 @@ def build_builder_options(
 
 
 def build_critic_options(config: BotConfig, work_dir: Path, stderr_cb) -> ClaudeAgentOptions:
-    """Options for a one-shot critic pass: read-only, sees only the run dir."""
+    """Options for a one-shot critic pass.
+
+    The critic is SANDBOXED to ``work_dir`` (a clean review folder holding only the
+    images to judge) — it can Read nothing else, so the builder's scripts, logs and
+    self-assessment in the run directory cannot influence it. Read-only, no Bash/web.
+    """
     cli = find_claude_cli(config.cli_path)
     return ClaudeAgentOptions(
         system_prompt=critic_system_prompt(),
-        allowed_tools=["Read", "Glob"],
+        allowed_tools=["Read"],
         permission_mode="bypassPermissions",
         max_turns=8,
         model=config.model,
         cwd=str(work_dir.resolve()),
         cli_path=cli,
         setting_sources=[],
-        add_dirs=[str(config.run_dir.resolve())],
+        add_dirs=[str(work_dir.resolve())],  # ONLY the clean review dir — full isolation
         stderr=stderr_cb,
         env=auth_env(),
     )
