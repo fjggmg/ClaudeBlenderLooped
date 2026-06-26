@@ -439,10 +439,41 @@ bbox grounding math is standard; join is `bpy.ops.object.join`. confidence high.
      """# Varied Instances (no two trees the same)
 
 ## When to use
-Whenever you place many of something that should differ — trees, rocks, bushes, crowds,
-debris, buildings. Identical copies read as fake and lazy.
+Whenever you place MANY of something — trees, rocks, bushes, crowds, debris, houses. Make a
+SMALL pool of unique variants once, then scatter cheap instances of the pool with per-instance
+variation. Identical copies read as fake; regenerating 100 meshes wastes hours of GPU.
 
-## Approaches (best first)
+## Library + scatter (THE way to populate a scene)
+Build a pool of ~3-10 UNIQUE base meshes (generate via gen3d / download CC0 / model a few), then
+scatter many instances. 5-10 unique trees -> a forest of 100; one crate -> a stack of 30.
+```python
+import bpy, random, math
+from mathutils import Vector
+
+def scatter_pool(pool, count, area=(12.0, 12.0), floor_z=0.0, scale_jitter=0.3, seed=0):
+    # pool = a few unique base mesh objects. Places `count` INSTANCES (linked mesh data =
+    # cheap memory) across `area`, each with random pick + transform, grounded to the floor.
+    random.seed(seed); placed = []
+    for _ in range(count):
+        src = pool[random.randrange(len(pool))]
+        o = src.copy()                          # linked duplicate: shares mesh data, cheap
+        bpy.context.collection.objects.link(o)
+        o.location = (random.uniform(-area[0]/2, area[0]/2),
+                      random.uniform(-area[1]/2, area[1]/2), 0.0)
+        s = 1.0 + random.uniform(-scale_jitter, scale_jitter)
+        o.scale = (s, s, s * random.uniform(0.9, 1.15))
+        o.rotation_euler = (random.uniform(-0.12, 0.12), random.uniform(-0.12, 0.12),
+                            random.uniform(0, 2 * math.pi))
+        bpy.context.view_layer.update()
+        zmin = min((o.matrix_world @ Vector(c)).z for c in o.bound_box)
+        o.location.z += floor_z - zmin          # drop each to the floor
+        placed.append(o)
+    return placed
+```
+For a terrain, sample positions on its surface (or use Geometry Nodes "Distribute Points on
+Faces"); space big objects out (poisson/grid jitter) so they don't overlap.
+
+## Per-variant techniques (to build the pool / add more variety)
 1. PROCEDURAL with a different SEED per instance — best variation. Trees: enable the bundled
    Sapling add-on and vary the seed.
    ```python

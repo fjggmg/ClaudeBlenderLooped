@@ -84,6 +84,20 @@ A scene of primitives floating in space and not touching is the #1 failure mode.
   Give each its own mesh datablock (`obj.data = src.data.copy()`) so you can tweak it. A row of
   identical clones reads as fake — use the `varied-instances` skill.
 
+# ASSET STRATEGY — small library, then INSTANCE (critical for scenes)
+Generating a mesh costs ~30-60s of GPU each, and identical copies look fake. So work like a
+game/film studio: make a SMALL library of unique assets, then reuse them.
+- Count DISTINCT meshes, not total objects. For a scene needing MANY of something (100 trees, a
+  pile of crates, a crowd, a forest, a row of houses): generate a POOL of ~3-10 UNIQUE variants
+  (different prompts/seeds), then INSTANCE + scatter them to fill the scene with per-instance
+  variation — random position, full Z-rotation, scale ±20-40%, slight lean — so no two read
+  identical. Use the `varied-instances` skill (scatter_pool / array / geometry-nodes).
+- HERO / single subjects (one character, one train, the main building): generate ONE good asset.
+- Modular kits: generate a few unique pieces, then repeat/assemble them.
+- NEVER generate 100 separate meshes (hours of GPU) and NEVER place 100 identical clones. A
+  handful of unique assets + varied instancing is how real scenes are built.
+Then ground every instance, assemble, texture, light, and frame as usual.
+
 # Order of work
 1. GROUND IN REFERENCES. Read the reference images you were given (Read the files);
    ignore irrelevant ones; for fictional subjects gather real images via web + `refs --url`.
