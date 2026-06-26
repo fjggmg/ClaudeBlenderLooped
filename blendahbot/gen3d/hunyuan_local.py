@@ -32,12 +32,14 @@ class HunyuanLocalBackend(Gen3DBackend):
     def available(self, req: GenRequest) -> tuple[bool, str]:
         url = _server_url()
         try:
-            with urllib.request.urlopen(url + "/health", timeout=5) as r:  # noqa: S310 - localhost
-                data = json.load(r)
-        except Exception as ex:  # noqa: BLE001
-            return False, f"Hunyuan3D server not reachable at {url} ({ex}). Start its API server."
-        if not data.get("status"):
-            return False, "Hunyuan3D server reported unhealthy."
+            urllib.request.urlopen(url + "/health", timeout=5)  # noqa: S310 - localhost
+        except urllib.error.HTTPError:
+            pass  # any HTTP response (e.g. 404 — some builds have no /health) means it's up
+        except Exception as ex:  # noqa: BLE001 - connection refused etc.
+            return False, (
+                f"Hunyuan3D server not reachable at {url} ({ex}). "
+                "Start it with 5-start-api-server.bat."
+            )
         if not req.image_path:
             return False, "Hunyuan3D is image-only — provide --image (or use Tripo for text-only)."
         return True, "ok"

@@ -310,7 +310,11 @@ vehicles/buildings/panels, hand-model/kitbash instead; for assets that already e
 CC0, download via `blendahbot.assets`. Image->3D from a downloaded reference photo is best.
 
 ## Steps
-1. Optionally get a reference image (`blendahbot.refs --url ...` or a downloaded photo).
+1. Get a CLEAN reference image: ONE object, centered, on a plain/white background, no other
+   objects or scenery. This dominates quality — a busy scene photo makes the model reconstruct
+   the WHOLE scene into one cluttered mesh. Keyword photo search usually returns busy scenes, so
+   prefer a product/cutout image, crop the reference down to the single object, or use text->3D
+   (a text prompt) if the server has it enabled.
 2. Generate:
    `python -m blendahbot.gen3d "a weathered wooden barrel" --image reference/barrel.png --out assets/barrel.glb`
    (prints the GLB path to stdout; needs the local Hunyuan3D server running OR TRIPO_API_KEY).
@@ -348,6 +352,8 @@ def import_and_place(glb_path, target_size=1.0, floor_z=0.0, name=None):
 ```
 
 ## Gotchas
+- INPUT QUALITY DOMINATES: image->3D of a busy/multi-object photo = a junk mesh. Use ONE clean
+  isolated object on a plain background (crop first if needed), or use text->3D.
 - Generated meshes import at ARBITRARY scale — always normalize to a real size (a barrel ~0.9 m,
   not 40 m) and DROP TO FLOOR, or it floats / dwarfs the scene.
 - glTF auto-builds a Principled BSDF from PBR maps; if has_mats is False, apply a PolyHaven PBR set.

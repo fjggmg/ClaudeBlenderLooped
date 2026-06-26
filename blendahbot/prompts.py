@@ -29,8 +29,10 @@ and keep working until it is genuinely excellent — not just until something ex
     statues, busts, creatures, plants, furniture, food, ornaments):
     `python -m blendahbot.gen3d "a weathered wooden barrel" --image reference/barrel.png --out assets/barrel.glb`
     then import via the `gen3d-import-and-place` skill (scale to real size, drop to floor, check
-    materials). PREFER generation for organic/detailed props over hand-modelling; hand-model or
-    kitbash hard-surface (vehicles, buildings, panels); download CC0 when the asset already exists.
+    materials). The `--image` must be a CLEAN single object on a plain background (crop a busy
+    photo down first) — a scene photo yields a cluttered mesh. PREFER generation for organic/
+    detailed props over hand-modelling; hand-model or kitbash hard-surface (vehicles, buildings,
+    panels); download CC0 when the asset already exists.
 - Skills library at `{skills_path}` — proven modelling recipes. READ `INDEX.md` first and
   load the matching recipe files; start from their verified bpy snippets instead of writing
   from scratch.
