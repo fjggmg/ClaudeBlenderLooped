@@ -109,6 +109,32 @@ python -m blendahbot.refs "wooden cabin forest" --out reference -n 6
 
 Tune with `--refs N` or turn it off with `--no-refs`.
 
+### 3D-asset generation (local, on your GPU)
+
+For organic / detail-dense props the bot can **generate a mesh from a text prompt** instead of
+hand-modelling (its weak spot), via a local Hunyuan3D-2 server on your GPU — free and offline:
+
+```powershell
+python -m blendahbot.gen3d "a weathered wooden barrel" --out assets/barrel.glb
+```
+
+`gen3d` auto-detects the local server on `:8081`. Image→3D also works (`--image clean.png`) but
+needs a *clean single-object* photo. To use the hosted Tripo API instead, set `TRIPO_API_KEY`.
+
+**One-time local setup** (≈16 GB VRAM; tested on an RTX 5080): grab the
+[Hunyuan3D-2 WinPortable](https://github.com/YanWenKun/Hunyuan3D-2-WinPortable) build, extract to a
+short path like `C:\AI\Hunyuan3D2_WinPortable`, then (the scripts live in `WinScripts-Legacy\en-us`):
+
+1. **Models** — run `2-download-models.bat`; for text→3D also pull the text-to-image model:
+   `python_standalone\Scripts\hf.exe download Tencent-Hunyuan/HunyuanDiT-v1.1-Diffusers-Distilled`.
+2. **Pin the hub** — `python_standalone\python.exe -m pip install "huggingface-hub>=0.34,<1.0"`
+   (the download script otherwise installs a hub ≥1.0 that breaks `transformers` at import).
+3. **Enable text→3D** — in `Hunyuan3D-2\api_server.py` uncomment the `self.pipeline_t2i =
+   HunyuanDiTPipeline(...)` init, and in `hy3dgen\text2image.py` drop `torch.set_default_device('cpu')`
+   and add `self.pipe.enable_model_cpu_offload()` after the pipe loads (runs it on the GPU and
+   fixes a cuda-generator/cpu-pipe crash).
+4. **Run** — `5-start-api-server.bat` (serves on `:8081`). Keep it running while the bot builds.
+
 ### Live steering (any launch method)
 
 Steering is on by default for every build. Lines you type are injected as authoritative

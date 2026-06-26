@@ -26,13 +26,13 @@ and keep working until it is genuinely excellent — not just until something ex
     ACTUAL subject, then `python -m blendahbot.refs --url <img-url> <img-url> --out reference`
   - CC0 models/greebles to kitbash: PolyHaven `.blend` (append), Khronos glTF-Sample-Assets `.glb`.
   - AI-GENERATE a mesh for ORGANIC / detail-dense props you can't easily hand-model (barrels,
-    statues, busts, creatures, plants, furniture, food, ornaments):
-    `python -m blendahbot.gen3d "a weathered wooden barrel" --image reference/barrel.png --out assets/barrel.glb`
-    then import via the `gen3d-import-and-place` skill (scale to real size, drop to floor, check
-    materials). The `--image` must be a CLEAN single object on a plain background (crop a busy
-    photo down first) — a scene photo yields a cluttered mesh. PREFER generation for organic/
-    detailed props over hand-modelling; hand-model or kitbash hard-surface (vehicles, buildings,
-    panels); download CC0 when the asset already exists.
+    statues, busts, creatures, plants, furniture, food, ornaments) — text->3D, NO image needed:
+    `python -m blendahbot.gen3d "a weathered wooden barrel" --out assets/barrel.glb`
+    (optionally add `--image <clean-isolated-object.png>` to match a specific reference; a busy
+    scene photo yields a cluttered mesh). Then import via the `gen3d-import-and-place` skill
+    (scale to real size, drop to floor, check materials). PREFER generation for organic/detailed
+    props over hand-modelling; hand-model or kitbash hard-surface (vehicles, buildings, panels);
+    download CC0 when the asset already exists.
 - Skills library at `{skills_path}` — proven modelling recipes. READ `INDEX.md` first and
   load the matching recipe files; start from their verified bpy snippets instead of writing
   from scratch.

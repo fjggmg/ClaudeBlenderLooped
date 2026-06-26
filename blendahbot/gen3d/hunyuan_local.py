@@ -40,17 +40,20 @@ class HunyuanLocalBackend(Gen3DBackend):
                 f"Hunyuan3D server not reachable at {url} ({ex}). "
                 "Start it with 5-start-api-server.bat."
             )
-        if not req.image_path:
-            return False, "Hunyuan3D is image-only — provide --image (or use Tripo for text-only)."
+        if not req.image_path and not req.prompt:
+            return False, "provide --image (image->3D) or a text prompt (text->3D)."
         return True, "ok"
 
     def generate(
         self, req: GenRequest, out: Path, on_progress: ProgressFn | None = None, timeout: float = 600.0
     ) -> GenResult:
-        if not req.image_path or not Path(req.image_path).exists():
-            raise Gen3DError("Hunyuan3D needs an existing --image path.")
-        img_b64 = base64.b64encode(Path(req.image_path).read_bytes()).decode("ascii")
-        payload: dict[str, object] = {"image": img_b64, "texture": bool(req.texture)}
+        payload: dict[str, object] = {"texture": bool(req.texture)}
+        if req.image_path and Path(req.image_path).exists():
+            payload["image"] = base64.b64encode(Path(req.image_path).read_bytes()).decode("ascii")
+        elif req.prompt:
+            payload["text"] = req.prompt  # server runs text->image->3D
+        else:
+            raise Gen3DError("Hunyuan3D needs an --image or a text prompt.")
         if req.seed is not None:
             payload["seed"] = req.seed
         if req.face_count is not None:

@@ -310,14 +310,12 @@ vehicles/buildings/panels, hand-model/kitbash instead; for assets that already e
 CC0, download via `blendahbot.assets`. Image->3D from a downloaded reference photo is best.
 
 ## Steps
-1. Get a CLEAN reference image: ONE object, centered, on a plain/white background, no other
-   objects or scenery. This dominates quality — a busy scene photo makes the model reconstruct
-   the WHOLE scene into one cluttered mesh. Keyword photo search usually returns busy scenes, so
-   prefer a product/cutout image, crop the reference down to the single object, or use text->3D
-   (a text prompt) if the server has it enabled.
-2. Generate:
-   `python -m blendahbot.gen3d "a weathered wooden barrel" --image reference/barrel.png --out assets/barrel.glb`
-   (prints the GLB path to stdout; needs the local Hunyuan3D server running OR TRIPO_API_KEY).
+1. EASIEST — text->3D (NO reference image; the local server makes a clean image internally):
+   `python -m blendahbot.gen3d "a weathered wooden barrel" --out assets/barrel.glb`
+2. OR image->3D to match a specific look — use a CLEAN single object on a plain background; a
+   busy scene photo reconstructs the WHOLE scene into a cluttered mesh, so crop to the object:
+   `python -m blendahbot.gen3d "wooden barrel" --image reference/barrel.png --out assets/barrel.glb`
+   (prints the GLB path to stdout; needs the local Hunyuan3D server on :8081, or TRIPO_API_KEY).
 3. Import + place with the snippet below.
 4. If it imported geometry-only (no materials), UV-unwrap and apply a PolyHaven PBR set
    (see pbr-material-from-polyhaven), then light and frame as usual.
