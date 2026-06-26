@@ -273,6 +273,107 @@ def recessed_panel(obj, G, thickness_mult=0.3, depth_mult=-0.05):
 ## Validated result
 Standard 5.1 operator args. Pending in-scene render validation -> confidence medium."""),
 
+    ("grounding-and-assembly",
+     "EVERY multi-part build. Stops the #1 failure: primitives floating and not connected.",
+     "high",
+     """# Grounding + Assembly (stop floating, disconnected primitives)
+
+## When to use
+EVERY build with more than one part. A pile of primitives floating in the air and not
+touching is the single most common failure. Objects must rest on the ground and parts
+must physically connect.
+
+## Steps
+1. Build/position each part roughly.
+2. `drop_to_floor(obj)` for everything that rests on the ground (walls, trunks, rocks, body).
+3. `place_on_top(part, base, overlap)` to stack connected parts (roof ON walls, canopy ON
+   trunk, cap ON chimney) — use a small overlap so they meet with no gap.
+4. Make pieces that form ONE object actually one: `join_objects([...])` or a Boolean union.
+   A chimney should PENETRATE the roof; a handle should meet the body.
+5. Render a SIDE / orthographic view and confirm nothing floats and every part touches its
+   neighbour and the ground. Fix gaps before finishing.
+
+## bpy snippet
+```python
+import bpy
+from mathutils import Vector
+
+def _bbox_world(obj):
+    return [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+
+def drop_to_floor(obj, floor_z=0.0):
+    bpy.context.view_layer.update()
+    obj.location.z += floor_z - min(v.z for v in _bbox_world(obj))
+
+def place_on_top(obj, base, overlap=0.0):
+    bpy.context.view_layer.update()
+    base_top = max(v.z for v in _bbox_world(base))
+    obj_bottom = min(v.z for v in _bbox_world(obj))
+    obj.location.z += (base_top - obj_bottom) - overlap
+
+def join_objects(objs, name=None):
+    bpy.ops.object.select_all(action='DESELECT')
+    for o in objs: o.select_set(True)
+    bpy.context.view_layer.objects.active = objs[0]
+    bpy.ops.object.join()
+    if name: objs[0].name = name
+    return objs[0]
+```
+
+## Gotchas
+- Call `bpy.context.view_layer.update()` after MOVING objects, before reading `matrix_world`.
+- OVERLAP connected parts slightly — never leave an air gap; a visible seam reads as "broken".
+- `join()` merges into the ACTIVE object; set the active object explicitly.
+- A floating object is an automatic fail. Drop EVERYTHING to where it should sit.
+
+## Validated result
+bbox grounding math is standard; join is `bpy.ops.object.join`. confidence high."""),
+
+    ("varied-instances",
+     "Placing MANY of something that should differ (trees, rocks, crowd) — stops identical-clone copies.",
+     "high",
+     """# Varied Instances (no two trees the same)
+
+## When to use
+Whenever you place many of something that should differ — trees, rocks, bushes, crowds,
+debris, buildings. Identical copies read as fake and lazy.
+
+## Approaches (best first)
+1. PROCEDURAL with a different SEED per instance — best variation. Trees: enable the bundled
+   Sapling add-on and vary the seed.
+   ```python
+   import bpy
+   bpy.ops.preferences.addon_enable(module="add_curve_sapling_3")
+   for i, loc in enumerate(positions):
+       bpy.ops.curve.tree_add(do_update=True, seed=i, bevel=True, prune=False, leaves=150)
+       t = bpy.context.active_object; t.location = loc      # different seed -> different tree
+   ```
+2. GEOMETRY NODES scatter (Distribute Points on Faces -> Instance on Points, with randomized
+   Rotation + Scale) for fields of grass / rocks / trees with built-in variation.
+3. RANDOMIZED COPIES of a base mesh — quick fallback:
+   ```python
+   import bpy, random, math
+   def varied_copy(src, location, scale_jitter=0.3, lean=0.15, seed=0):
+       random.seed(seed)
+       o = src.copy(); o.data = src.data.copy()     # UNIQUE mesh so it can differ
+       bpy.context.collection.objects.link(o); o.location = location
+       s = 1.0 + random.uniform(-scale_jitter, scale_jitter)
+       o.scale = (s*random.uniform(0.85,1.15), s*random.uniform(0.85,1.15), s*random.uniform(0.9,1.2))
+       o.rotation_euler.z = random.uniform(0, 2*math.pi)
+       o.rotation_euler.x += random.uniform(-lean, lean)
+       o.rotation_euler.y += random.uniform(-lean, lean)
+       return o
+   ```
+   Then tweak a few verts / swap proportions on some so they are not just scaled clones.
+
+## Gotchas
+- `obj.data = src.data.copy()` is ESSENTIAL — without it copies share one mesh and edits hit all.
+- Randomize rotation AND proportions, not just uniform scale (uniform scale still looks cloned).
+- Drop each instance to the floor after placing (see grounding-and-assembly).
+
+## Validated result
+copy()/data.copy() + Sapling `tree_add(seed=)` are standard bpy. confidence medium-high."""),
+
     ("greeble-scatter",
      "Adding asymmetric silhouette-breaking mechanical detail (vents, intakes, struts, antennae).",
      "medium",

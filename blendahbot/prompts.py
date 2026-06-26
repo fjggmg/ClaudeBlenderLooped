@@ -45,6 +45,35 @@ and keep working until it is genuinely excellent — not just until something ex
 - bmesh: `faces.new(...)` with a repeated vertex raises "same BMVert used multiple times" — build
   each face from DISTINCT, correctly-ordered verts; for caps/cones use a fan of unique triangles.
 
+# GROUND IT + CONNECT IT (critical — the most common failure)
+A scene of primitives floating in space and not touching is the #1 failure mode. Enforce:
+- GROUND: every object sits ON the ground/terrain — NOTHING floats. After placing an object,
+  drop it so its lowest point touches the floor (offset Z by the world-space min-Z of its
+  bbox). Tree trunks reach the ground; a canopy sits ON its trunk; walls sit on the terrain.
+- CONNECT: parts must physically touch/overlap, never hover near each other. A roof sits ON the
+  walls (overlap slightly); a chimney PENETRATES the roof; a cap meets the post. Where pieces
+  form one object, JOIN them (`bpy.ops.object.join`) or BOOLEAN-union — one connected mesh, not
+  a loose pile. Use the `grounding-and-assembly` skill (drop_to_floor / place_on_top / join).
+- NO PRIMITIVE-AS-FINAL: a UV sphere is not a tree, a cone is not a roof, a cube is not a wall.
+  Start from a primitive but EDIT it (extrude/inset/bevel/taper) into the real form before
+  grounding and connecting. Shipping recognizable default primitives is a failure.
+- VERIFY: render a SIDE / orthographic view specifically to check that nothing floats and every
+  part connects to its neighbour and the ground. Fix every gap before `declare_done`.
+
+# USE EVERY TOOL + MAKE THINGS VARY
+- NO TOOL RESTRICTIONS. Reach for ANY capability that helps — you are not limited to hand-
+  writing meshes. Enable any BUNDLED Blender add-on with
+  `bpy.ops.preferences.addon_enable(module="...")` (e.g. `add_curve_sapling_3` for procedural
+  trees, `add_mesh_extra_objects`, `add_mesh_geodesic_domes`); use GEOMETRY NODES, particle
+  systems, the asset browser, physics; `pip install` packages; download asset packs / CC0
+  models and import them; write and run helper scripts. If a tool would make it better, use it.
+- VARIATION — never ship identical copies of things that should differ (trees, rocks, crowds,
+  buildings, debris). Each instance MUST vary: randomize scale (±20-40%), full Z rotation, a
+  small lean, and proportions; OR generate procedurally with a DIFFERENT SEED per instance
+  (e.g. Sapling `bpy.ops.curve.tree_add(..., seed=i)` per tree); OR use different base models.
+  Give each its own mesh datablock (`obj.data = src.data.copy()`) so you can tweak it. A row of
+  identical clones reads as fake — use the `varied-instances` skill.
+
 # Order of work
 1. GROUND IN REFERENCES. Read the reference images you were given (Read the files);
    ignore irrelevant ones; for fictional subjects gather real images via web + `refs --url`.
@@ -124,6 +153,14 @@ camera framing and composition intentional and good; does it match any implied s
 If reference photos are provided, compare the render against them — does it capture the
 subject's real proportions, materials and silhouette, or does it look like a crude
 gray-box approximation? Hold it to the references.
+
+STRUCTURAL INTEGRITY (weight these heavily — they are the most common failures):
+- Does anything FLOAT off the ground, or do parts hover near each other instead of touching?
+- Are the pieces actually CONNECTED (overlapping/joined), or a loose pile of separate shapes?
+- Are objects still recognizable DEFAULT PRIMITIVES (UV-sphere "trees", cone "roofs", bare
+  cubes) rather than edited forms?
+A floating, disconnected, or primitive-looking result should score LOW no matter how nice the
+lighting is, and you should say so specifically in issues.
 
 Be specific and fair but do not rubber-stamp. A gray blockout, a black/empty frame, a
 miscomposed shot, or a result missing key elements is NOT satisfied.
