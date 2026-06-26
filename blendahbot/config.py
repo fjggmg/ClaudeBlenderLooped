@@ -40,6 +40,13 @@ class BotConfig:
     score_threshold: int = 80
     use_critic: bool = True
 
+    # Opt-in independent vetting of generated assets (gen3d --vet). When on, the builder
+    # is told to pass --vet to gen3d so an independent critic gates every generated mesh
+    # in isolation and auto-regenerates a bad one before it reaches the scene.
+    vet_assets: bool = False
+    vet_max_attempts: int = 2
+    vet_score_threshold: int = 55
+
     # Model + brain.
     model: str | None = None
     setting_sources: list[str] = field(default_factory=list)
@@ -103,5 +110,7 @@ class BotConfig:
             kwargs["model"] = v
         if (v := os.environ.get("BLENDAHBOT_OUT")):
             kwargs["out_root"] = Path(v)
+        if os.environ.get("BLENDAHBOT_VET_ASSETS"):
+            kwargs["vet_assets"] = True
         kwargs.update({k: v for k, v in overrides.items() if v is not None})
         return cls(**kwargs)  # type: ignore[arg-type]

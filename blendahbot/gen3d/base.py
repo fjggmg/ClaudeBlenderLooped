@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -26,6 +26,11 @@ class GenRequest:
 class GenResult:
     path: Path
     backend: str
+    # Set by the opt-in vet loop (vet.py). ``vetted`` is False when an asset was
+    # returned without passing the independent asset-critic (e.g. attempts ran out);
+    # ``issues`` then carries the unresolved defects so the caller can react.
+    vetted: bool = True
+    issues: list[str] = field(default_factory=list)
 
 
 ProgressFn = Callable[[str], None]
@@ -46,10 +51,17 @@ class Gen3DBackend(ABC):
 
 
 def _backends() -> dict[str, Gen3DBackend]:
+    from .hunyuan3d import Hunyuan3DReplicateBackend
     from .hunyuan_local import HunyuanLocalBackend
+    from .trellis_local import TrellisLocalBackend
     from .tripo import TripoBackend
 
-    return {"hunyuan": HunyuanLocalBackend(), "tripo": TripoBackend()}
+    return {
+        "hunyuan": HunyuanLocalBackend(),
+        "trellis": TrellisLocalBackend(),
+        "hunyuan3": Hunyuan3DReplicateBackend(),
+        "tripo": TripoBackend(),
+    }
 
 
 def get_backend(name: str | None = None) -> Gen3DBackend:
@@ -61,18 +73,21 @@ def get_backend(name: str | None = None) -> Gen3DBackend:
             raise Gen3DError(f"unknown backend '{name}'; choose from {sorted(backends)}")
         return backends[name]
 
-    # Auto: prefer the local Hunyuan server if it answers, else Tripo if a key is set.
+    # Auto: prefer the free local Hunyuan server if it answers, then the hosted fallbacks
+    # whose keys are set (Tripo, then Hunyuan3D 3.1). Hosted backends cost credits, so they
+    # only activate when their key is present and the local server isn't reachable.
     hy = backends["hunyuan"]
     ok, _ = hy.available(GenRequest(image_path="(probe)"))
     if ok:
         return hy
-    tp = backends["tripo"]
-    ok, _ = tp.available(GenRequest(prompt="(probe)"))
-    if ok:
-        return tp
+    for fallback in ("tripo", "hunyuan3"):
+        ok, _ = backends[fallback].available(GenRequest(prompt="(probe)"))
+        if ok:
+            return backends[fallback]
     raise Gen3DError(
         "No 3D-gen backend available. Start the local Hunyuan3D server "
-        "(BLENDAHBOT_HUNYUAN_URL, default http://localhost:8081) or set TRIPO_API_KEY."
+        "(BLENDAHBOT_HUNYUAN_URL, default http://localhost:8081), or set TRIPO_API_KEY, "
+        "or set REPLICATE_API_TOKEN (for hosted Hunyuan3D 3.1, --backend hunyuan3)."
     )
 
 

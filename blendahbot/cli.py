@@ -36,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", default=None, help="Model id (e.g. claude-opus-4-8). Default: CLI default.")
     p.add_argument("--threshold", type=int, default=None, help="Critic score (0-100) required to finish (default: 80).")
     p.add_argument("--no-critic", action="store_true", help="Skip the independent critic; trust the builder's self-assessment.")
+    p.add_argument("--vet-assets", action="store_true", help="Independently vet each generated 3D asset in isolation and auto-regenerate bad ones before placing them (extra cost/latency per asset).")
+    p.add_argument("--vet-max-attempts", type=int, default=None, help="Max generate+vet attempts per asset when --vet-assets is on (default: 2).")
     p.add_argument("--no-steer", action="store_true", help="Disable live steering (don't read stdin for mid-build instructions).")
     p.add_argument("--refs", type=int, default=None, help="Reference photos to fetch up front to ground the build (default: 6).")
     p.add_argument("--no-refs", action="store_true", help="Don't fetch reference images.")
@@ -67,10 +69,13 @@ def _config_from_args(args: argparse.Namespace, request: str) -> BotConfig:
         "plain": args.plain or None,
         "verbose": args.verbose or None,
         "refs": args.refs,
+        "vet_max_attempts": args.vet_max_attempts,
     }
     overrides.update({k: v for k, v in cli.items() if v is not None})
     if args.no_critic:
         overrides["use_critic"] = False
+    if args.vet_assets:
+        overrides["vet_assets"] = True
     if args.no_steer:
         overrides["steer"] = False
     if args.no_refs:

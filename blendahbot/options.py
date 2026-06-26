@@ -9,7 +9,7 @@ from claude_agent_sdk import ClaudeAgentOptions, McpSdkServerConfig
 from .auth import auth_env
 from .config import BotConfig
 from .discovery import find_blender_mcp_command, find_claude_cli
-from .prompts import builder_system_prompt, critic_system_prompt
+from .prompts import asset_critic_system_prompt, builder_system_prompt, critic_system_prompt
 from .skills import skills_dir
 from .tools import DONE_TOOL, NOTE_TOOL
 
@@ -57,7 +57,7 @@ def build_builder_options(
     ]
 
     return ClaudeAgentOptions(
-        system_prompt=builder_system_prompt(render_dir, str(skills_dir())),
+        system_prompt=builder_system_prompt(render_dir, str(skills_dir()), config.vet_assets),
         mcp_servers={
             "blender": _blender_server(config),
             "bb": tools_server,
@@ -99,6 +99,30 @@ def build_critic_options(config: BotConfig, work_dir: Path, stderr_cb) -> Claude
         cli_path=cli,
         setting_sources=[],
         add_dirs=[str(work_dir.resolve())],  # ONLY the clean review dir — full isolation
+        stderr=stderr_cb,
+        env=auth_env(),
+    )
+
+
+def build_asset_critic_options(config: BotConfig, work_dir: Path, stderr_cb) -> ClaudeAgentOptions:
+    """Options for the opt-in, one-shot *asset* critic (gen3d --vet).
+
+    Same isolation discipline as :func:`build_critic_options` — read-only, sandboxed to
+    a clean folder holding only the isolated preview images — but with the asset-stage
+    rubric (is this ONE coherent, correctly-formed object?) instead of the scene rubric.
+    A couple more turns since it Reads a multi-angle contact sheet.
+    """
+    cli = find_claude_cli(config.cli_path)
+    return ClaudeAgentOptions(
+        system_prompt=asset_critic_system_prompt(),
+        allowed_tools=["Read"],
+        permission_mode="bypassPermissions",
+        max_turns=10,
+        model=config.model,
+        cwd=str(work_dir.resolve()),
+        cli_path=cli,
+        setting_sources=[],
+        add_dirs=[str(work_dir.resolve())],  # ONLY the clean preview dir — full isolation
         stderr=stderr_cb,
         env=auth_env(),
     )

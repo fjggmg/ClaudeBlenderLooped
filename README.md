@@ -121,7 +121,16 @@ python -m blendahbot.gen3d "a weathered wooden barrel" --out assets/barrel.glb
 ```
 
 `gen3d` auto-detects the local server on `:8081`. Image→3D also works (`--image clean.png`) but
-needs a *clean single-object* photo. To use the hosted Tripo API instead, set `TRIPO_API_KEY`.
+needs a *clean single-object* photo.
+
+**Hosted backends** (no GPU needed, cost credits) kick in as fallbacks when their key is set, or
+on demand with `--backend`:
+
+- **Hunyuan3D 3.1** — Tencent's v3 model (newer geometry + PBR, text+image), via Replicate. Set
+  `REPLICATE_API_TOKEN` and run `python -m blendahbot.gen3d "a barrel" --backend hunyuan3`. The
+  model defaults to `tencent/hunyuan-3d-3.1`; override with `BLENDAHBOT_HUNYUAN3D_MODEL`. (No open
+  weights exist for v3, so this is API-only — the local Hunyuan3D-2.1 server stays the free default.)
+- **Tripo** — set `TRIPO_API_KEY` (`--backend tripo`).
 
 **One-time local setup** (≈16 GB VRAM; tested on an RTX 5080): grab the
 [Hunyuan3D-2 WinPortable](https://github.com/YanWenKun/Hunyuan3D-2-WinPortable) build, extract to a

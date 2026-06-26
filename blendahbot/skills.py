@@ -89,9 +89,12 @@ import bpy, math
 from mathutils import Vector
 
 def setup_hero_camera(target, name="HeroCam", azimuth_deg=35.0, elevation_deg=18.0,
-                      lens_mm=50.0, margin=1.3, samples=256, resolution=(1920, 1080)):
+                      lens_mm=50.0, margin=1.3, samples=256, resolution=(1920, 1080),
+                      fstop=None):
     # Distance is derived from the camera FOV so the bounding sphere ALWAYS fits
     # (with margin) — fixes "the camera never gets everything".
+    # fstop (optional): enable depth-of-field focused on the subject centre for
+    # bokeh/subject isolation (low f = shallow). None = everything sharp.
     scene = bpy.context.scene
     scene.render.resolution_x, scene.render.resolution_y = resolution
     deps = bpy.context.evaluated_depsgraph_get(); target.update_tag(); deps.update()
@@ -105,6 +108,10 @@ def setup_hero_camera(target, name="HeroCam", azimuth_deg=35.0, elevation_deg=18
     vfov = 2 * math.atan(math.tan(hfov / 2) / aspect)
     dist = (radius * margin) / math.sin(min(hfov, vfov) / 2)   # tighter axis dictates fit
     cam_data.clip_start = max(dist * 0.01, 0.001); cam_data.clip_end = dist * 100.0
+    if fstop:                                   # depth-of-field: focus the subject centre
+        cam_data.dof.use_dof = True
+        cam_data.dof.focus_distance = dist
+        cam_data.dof.aperture_fstop = float(fstop)
     cam = bpy.data.objects.new(name, cam_data); scene.collection.objects.link(cam)
     az = math.radians(azimuth_deg); el = math.radians(elevation_deg)
     cam.location = center + Vector((dist*math.cos(el)*math.sin(az),
@@ -275,13 +282,22 @@ Framing ANY render — a single hero prop, a vehicle, a character, a building, o
 environment. This is a permanent catalog of named, proven camera setups with EXACT
 angle/lens/framing/composition, so you PICK a shot instead of guessing numbers. Pairs with
 hero-camera-setup (the FOV-fit math) and the loop's render-candidates-and-choose.
+The catalog is 120+ named shots in 9 families distilled from real media conventions — film
+shot-grammar, portrait & fine-art photography, product/packshot, architecture & interior,
+automotive press shots, game key-art / cinematics, and wildlife/macro — plus an optional
+depth-of-field (`fstop`) for subject isolation. Browse by the Shot families guide or jump
+straight to the subject table.
 
 ## How to use it
-1. From the subject table below, pick 3-5 candidate shots. Render them small with
-   `render_contact_sheet(target, out_dir, shots=[...])`, Read every `shot_*.png`, choose the
-   best-composed one.
+1. Find candidates two ways: the SUBJECT TABLE (fast, per-subject defaults) or the SHOT
+   FAMILIES guide (when you want a specific look — heroic, intimate, editorial, technical).
+   Pick 3-5, render them small with `render_contact_sheet(target, out_dir, shots=[...])`,
+   Read every `shot_*.png`, and choose the best-composed one.
 2. Re-render the winner at full samples/resolution with `place_shot(target, "<winner>")`.
 3. NEVER ship the default viewport camera or a dead-on axis-aligned shot.
+4. Unsure how a named shot reads? PULL REAL EXAMPLE MEDIA first and study the composition —
+   any source helps: `python -m blendahbot.refs "low angle hero car shot" --out reference`
+   (or WebSearch film stills / product photos of that shot type), then match what you see.
 
 ## What the numbers mean (framing knobs)
 - azimuth: 0=front, 90=right, 180=back, negative=left. A 3/4 (~30-45) shows TWO sides + depth.
@@ -294,18 +310,40 @@ hero-camera-setup (the FOV-fit math) and the loop's render-candidates-and-choose
   Below 1.0 crops INTO the subject for a detail shot.
 - shift_x/shift_y: rule-of-thirds nudge (puts the subject off-centre without re-aiming).
 - roll: dutch tilt (degrees) — tension/energy, use sparingly.
+- fstop: OPTIONAL depth-of-field. Low (1.4-2.8) = shallow, creamy bokeh that ISOLATES the
+  subject — for portrait / beauty / macro / single-creature; note it also softens the front &
+  back of the fitted subject, so reserve it for those. 4-8 = moderate. 11-16 = deep, all sharp
+  (architecture / landscape / establishing). Omit = everything sharp (the default).
+
+## Shot families (browse by the LOOK you want)
+- **Signature 3/4 & Hero** — default flattering three-quarter and hero angles for almost any subject.
+- **Film Shot Sizes & Angles** — continuity-editing coverage: full/medium/close sizes + power/vulnerable angles.
+- **Portrait & Tele Isolation** — face/figure geometry with telephoto compression and shallow depth.
+- **Fine-Art & Editorial Composition** — negative space, chiaroscuro, frame-in-frame, diagonal moods.
+- **Product & Commercial** — packshots, tabletop, beauty and macro-detail angles for goods and food.
+- **Architecture & Interior** — one/two-point perspective, elevations, aerials, interior corners.
+- **Automotive & Vehicle** — press-kit hero, profile, detail and dynamic angles tuned for vehicles.
+- **Key Art & Cinematic** — box-art splash, monumental reveals, turntables, presentation/loadout cards.
+- **Wildlife & Macro Nature** — eye-line tele portraits, habitat wides, worm/canopy angles, 1:1 macro.
+(The `# --- Family ---` comment headers in SHOTS below group every shot under these.)
 
 ## Subject -> shots to try (then contact-sheet and choose)
-| subject | candidates |
+| subject | candidates (contact-sheet, then pick) |
 |---|---|
-| product / prop (hero) | hero_3q, hero_3q_low, portrait_85, hero_3q_high, macro_detail |
-| vehicle (car/ship/mech) | vehicle_3q_low, side, low_hero, hero_3q_high, back_3q |
-| character / creature | char_full_3q, char_portrait, hero_3q_low, profile |
-| building / architecture | arch_2point, arch_hero_low, establishing_wide, centered_symmetry |
-| environment / scene | establishing_wide, birds_eye, low_hero, top_plan |
-| food / small goods | hero_3q_high, macro_detail, portrait_85 |
-| weapon / tool | side, hero_3q, macro_detail |
-| group / collection | establishing_wide, hero_3q_high, top_plan |
+| product | packshot_hero_3q_tele, tabletop_45, pack_straight_tele, macro_texture_extreme, low_glamour_hero, flat_lay_topdown |
+| prop | hero_3q, tabletop_45, insert_cut_in, chiaroscuro_low, negative_space_minimal |
+| vehicle | car_front_3q_low_hero, car_side_profile_pure, car_high_3q_beauty, car_rear_3q_low, car_wheel_detail, top_plan |
+| character | hero_3q, portrait_85, cowboy_american, rembrandt_short, close_up_emotional, keyart_hero_wide_left |
+| creature | low_creature_hero_wide, animal_portrait_tele, tele_isolation_3q, eye_line_ground_low, hero_3q, backlit_rim_silhouette |
+| building | two_point_corner_low, dusk_hero, hero_low_dramatic, aerial_3q, courtyard_context, facade_elevation |
+| interior | one_point_corridor, interior_wide_corner, upshot_ceiling, threshold_inside_out, plan_roof |
+| environment | extreme_wide_establishing, habitat_establishing, courtyard_context, aerial_3q, establishing_env_deep |
+| food | food_drink_high_3q, flat_lay_topdown, macro_texture_extreme, tabletop_45, medium_close_up |
+| weapon | weapon_loadout_profile, big_close_up, concept_orthoish_side, insert_cut_in |
+| group | keyart_hero_wide_left, establishing_env_deep, diorama_birdseye, extreme_wide_establishing, birds_eye |
+| plant | top_down_botanical, macro_extreme_detail, negative_space_minimal, dew_macro_dutch, habitat_establishing |
+| statue | hero_3q, strong_profile_tele, chiaroscuro_low, detail_facade, rembrandt_short, epic_low_ultrawide |
+| jewelry | jewelry_macro_isolate, beauty_tele_bokeh, macro_texture_extreme, pack_straight_tele |
 
 ## bpy: base FOV-fit camera (reused by the picker)
 """ + _FN_CAMERA + """
@@ -314,39 +352,137 @@ hero-camera-setup (the FOV-fit math) and the loop's render-candidates-and-choose
 import bpy, math, os
 from mathutils import Matrix
 
-# az=azimuth deg, el=elevation deg, lens=mm, m=framing margin, sx/sy=thirds shift, roll=dutch deg
+# az=azimuth deg, el=elevation deg, lens=mm, m=margin, sx/sy=thirds shift, roll=dutch deg, fstop=DOF f-number
 SHOTS = {
-    # --- beauty / product (single hero) ---
-    "hero_3q":            dict(az=35,  el=18, lens=50,  m=1.25, sx=-0.10, sy=0.04),
-    "hero_3q_left":       dict(az=-35, el=18, lens=50,  m=1.25, sx=0.10,  sy=0.04),
-    "hero_3q_low":        dict(az=35,  el=7,  lens=35,  m=1.30, sy=0.06),
-    "hero_3q_high":       dict(az=42,  el=38, lens=50,  m=1.30),
-    "portrait_85":        dict(az=25,  el=12, lens=85,  m=1.15, sx=-0.08),
-    "macro_detail":       dict(az=30,  el=16, lens=100, m=0.75),
-    # --- orthographic / technical (axis) ---
-    "front":              dict(az=0,   el=0,  lens=85,  m=1.40),
-    "side":               dict(az=90,  el=0,  lens=85,  m=1.40),
-    "profile":            dict(az=90,  el=8,  lens=85,  m=1.30),
-    "back":               dict(az=180, el=0,  lens=85,  m=1.40),
-    "back_3q":            dict(az=145, el=18, lens=50,  m=1.30),
-    "top_plan":           dict(az=0,   el=87, lens=50,  m=1.40),
-    # --- cinematic / dramatic ---
-    "low_hero":           dict(az=25,  el=5,  lens=28,  m=1.35, sy=0.05),
-    "worm_eye":           dict(az=20,  el=-8, lens=24,  m=1.30),
-    "birds_eye":          dict(az=30,  el=62, lens=35,  m=1.40),
-    "dutch_left":         dict(az=35,  el=16, lens=35,  m=1.30, roll=-12),
-    "dutch_right":        dict(az=-35, el=16, lens=35,  m=1.30, roll=12),
-    "establishing_wide":  dict(az=40,  el=12, lens=24,  m=2.20),
-    # --- composition variants ---
-    "thirds_left":        dict(az=35,  el=18, lens=50,  m=1.35, sx=0.12),
-    "thirds_right":       dict(az=-35, el=18, lens=50,  m=1.35, sx=-0.12),
-    "centered_symmetry":  dict(az=0,   el=6,  lens=50,  m=1.35),
-    # --- subject-specific conventions ---
-    "vehicle_3q_low":     dict(az=48,  el=6,  lens=35,  m=1.35, sy=0.05),
-    "char_full_3q":       dict(az=32,  el=8,  lens=50,  m=1.20),
-    "char_portrait":      dict(az=22,  el=10, lens=100, m=0.90, sx=-0.08),
-    "arch_2point":        dict(az=30,  el=4,  lens=28,  m=1.60, sy=0.10),
-    "arch_hero_low":      dict(az=25,  el=3,  lens=24,  m=1.70, sy=0.12),
+    # --- Signature 3/4 & Hero ---
+    "hero_3q":                      dict(az=35, el=18, lens=50, m=1.25, sx=-0.1, sy=0.04),
+    "hero_3q_left":                 dict(az=-35, el=18, lens=50, m=1.25, sx=0.1, sy=0.04),
+    "hero_3q_low":                  dict(az=35, el=7, lens=35, m=1.3, sy=0.06),
+    "hero_3q_high":                 dict(az=42, el=38, lens=50, m=1.3),
+    "back_3q":                      dict(az=145, el=18, lens=50, m=1.3),
+    "low_hero":                     dict(az=25, el=5, lens=28, m=1.35, sy=0.05),
+    # --- Film Shot Sizes & Angles ---
+    "front":                        dict(az=0, el=0, lens=85, m=1.4),
+    "side":                         dict(az=90, el=0, lens=85, m=1.4),
+    "back":                         dict(az=180, el=0, lens=85, m=1.4),
+    "worm_eye":                     dict(az=20, el=-8, lens=24, m=1.3),
+    "dutch_left":                   dict(az=35, el=16, lens=35, m=1.3, roll=-12),
+    "dutch_right":                  dict(az=-35, el=16, lens=35, m=1.3, roll=12),
+    "establishing_wide":            dict(az=40, el=12, lens=24, m=2.2),
+    "char_full_3q":                 dict(az=32, el=8, lens=50, m=1.2),
+    "extreme_wide_establishing":    dict(az=38, el=14, lens=18, m=2.7, sy=0.1, fstop=11.0),
+    "full_shot":                    dict(az=30, el=6, lens=40, m=1.55, sy=0.04),
+    "cowboy_american":              dict(az=33, el=4, lens=40, m=1.18, sx=-0.06, sy=0.08),
+    "medium_shot":                  dict(az=28, el=3, lens=50, m=1.0, sx=-0.05, sy=0.05),
+    "medium_close_up":              dict(az=24, el=4, lens=85, m=0.82, sx=-0.07, sy=0.04, fstop=4.0),
+    "close_up_emotional":           dict(az=18, el=5, lens=100, m=0.68, sx=-0.06, fstop=2.8),
+    "big_close_up":                 dict(az=10, el=2, lens=135, m=0.6, fstop=2.0),
+    "insert_cut_in":                dict(az=35, el=22, lens=100, m=0.7, fstop=2.8),
+    "low_angle_power":              dict(az=22, el=-6, lens=28, m=1.3, sy=0.07),
+    "high_angle_vulnerable":        dict(az=26, el=45, lens=50, m=1.4, sy=-0.04),
+    "eye_level_neutral":            dict(az=20, el=1, lens=50, m=1.22, sx=-0.05, sy=0.02),
+    "ots_feel":                     dict(az=58, el=7, lens=85, m=1.08, sx=0.12, fstop=2.8),
+    "pov_low_drama":                dict(az=15, el=-14, lens=24, m=1.45, sy=0.1, roll=4),
+    "dutch_unease":                 dict(az=28, el=10, lens=40, m=1.28, sx=0.06, roll=16),
+    # --- Portrait & Tele Isolation ---
+    "portrait_85":                  dict(az=25, el=12, lens=85, m=1.15, sx=-0.08),
+    "profile":                      dict(az=90, el=8, lens=85, m=1.3),
+    "char_portrait":                dict(az=22, el=10, lens=100, m=0.9, sx=-0.08),
+    "rembrandt_short":              dict(az=40, el=14, lens=85, m=1.0, sx=-0.07, sy=0.03, fstop=2.0),
+    "broad_two_thirds":             dict(az=28, el=10, lens=105, m=1.05, sx=0.07, sy=0.02, fstop=2.8),
+    "strong_profile_tele":          dict(az=90, el=4, lens=135, m=0.95, sx=0.1, fstop=2.5),
+    "thirds_phi_left":              dict(az=33, el=12, lens=85, m=1.3, sx=0.13, sy=0.08),
+    "thirds_phi_right":             dict(az=-33, el=12, lens=85, m=1.3, sx=-0.13, sy=0.08),
+    "close_eyes_thirds":            dict(az=18, el=15, lens=100, m=0.72, sx=-0.06, sy=0.1, fstop=2.0),
+    "phi_profile_lead_left":        dict(az=-90, el=6, lens=135, m=1.1, sx=-0.12, sy=0.02, fstop=2.5),
+    "tele_compression_iso":         dict(az=24, el=9, lens=160, m=1.1, sx=-0.06, sy=0.02, fstop=2.8),
+    "hero_phi_high_short":          dict(az=-42, el=28, lens=70, m=1.2, sx=-0.1, sy=-0.06),
+    # --- Fine-Art & Editorial Composition ---
+    "thirds_left":                  dict(az=35, el=18, lens=50, m=1.35, sx=0.12),
+    "thirds_right":                 dict(az=-35, el=18, lens=50, m=1.35, sx=-0.12),
+    "centered_symmetry":            dict(az=0, el=6, lens=50, m=1.35),
+    "negative_space_minimal":       dict(az=20, el=6, lens=70, m=2.4, sx=0.14, sy=0.1),
+    "overhead_flatlay_angled":      dict(az=0, el=78, lens=60, m=1.25),
+    "diagonal_tension":             dict(az=52, el=20, lens=35, m=1.3, sx=0.1, sy=0.07, roll=9),
+    "chiaroscuro_low":              dict(az=38, el=3, lens=50, m=1.15, sx=-0.09, sy=0.04, fstop=2.8),
+    "frame_in_frame_lead":          dict(az=30, el=8, lens=28, m=2.0, sx=0.08, sy=0.06, fstop=11.0),
+    # --- Product & Commercial ---
+    "macro_detail":                 dict(az=30, el=16, lens=100, m=0.75),
+    "packshot_hero_3q_tele":        dict(az=38, el=14, lens=100, m=1.2, sx=-0.08, sy=0.03),
+    "pack_straight_tele":           dict(az=0, el=2, lens=135, m=1.25),
+    "tabletop_45":                  dict(az=45, el=24, lens=85, m=1.3, sx=-0.06),
+    "flat_lay_topdown":             dict(az=0, el=89, lens=50, m=1.45),
+    "low_glamour_hero":             dict(az=30, el=4, lens=85, m=1.15, sy=0.06, fstop=2.0),
+    "beauty_tele_bokeh":            dict(az=22, el=10, lens=135, m=1.1, sx=-0.07, fstop=1.8),
+    "macro_texture_extreme":        dict(az=28, el=18, lens=100, m=0.62, fstop=4.0),
+    "reflection_studio":            dict(az=12, el=6, lens=85, m=1.55, sy=-0.05),
+    "food_drink_high_3q":           dict(az=35, el=32, lens=85, m=1.3, sx=-0.05, fstop=2.8),
+    "pack_label_3q":                dict(az=28, el=8, lens=100, m=1.2, sx=-0.1, sy=0.02),
+    "jewelry_macro_isolate":        dict(az=20, el=22, lens=150, m=0.8, sx=-0.05, fstop=2.2),
+    "luxury_compressed_200":        dict(az=85, el=6, lens=200, m=1.25),
+    "three_quarter_back_pack":      dict(az=150, el=12, lens=85, m=1.25, sx=0.06),
+    "hero_dutch_dynamic":           dict(az=40, el=12, lens=50, m=1.2, sx=-0.06, sy=0.04, roll=9),
+    # --- Architecture & Interior ---
+    "top_plan":                     dict(az=0, el=87, lens=50, m=1.4),
+    "birds_eye":                    dict(az=30, el=62, lens=35, m=1.4),
+    "arch_2point":                  dict(az=30, el=4, lens=28, m=1.6, sy=0.1),
+    "arch_hero_low":                dict(az=25, el=3, lens=24, m=1.7, sy=0.12),
+    "one_point_corridor":           dict(az=0, el=0, lens=24, m=1.9, fstop=11.0),
+    "two_point_corner_low":         dict(az=38, el=3, lens=20, m=1.7, sy=0.1, fstop=11.0),
+    "facade_elevation":             dict(az=0, el=2, lens=50, m=1.6, fstop=11.0),
+    "upshot_ceiling":               dict(az=10, el=72, lens=18, m=1.5, fstop=8.0),
+    "hero_low_dramatic":            dict(az=28, el=-6, lens=16, m=1.55, sy=0.12, fstop=11.0),
+    "dusk_hero":                    dict(az=42, el=5, lens=24, m=1.85, sy=0.08, fstop=11.0),
+    "courtyard_context":            dict(az=35, el=10, lens=28, m=2.4, fstop=13.0),
+    "aerial_3q":                    dict(az=40, el=48, lens=35, m=1.9, fstop=11.0),
+    "interior_wide_corner":         dict(az=35, el=-2, lens=18, m=2.0, fstop=13.0),
+    "detail_facade":                dict(az=30, el=8, lens=85, m=0.8, fstop=5.6),
+    "plan_roof":                    dict(az=0, el=84, lens=28, m=1.55, fstop=11.0),
+    "threshold_inside_out":         dict(az=8, el=0, lens=35, m=1.7, sx=0.06, fstop=13.0),
+    "sweeping_diagonal":            dict(az=55, el=14, lens=24, m=1.7, sx=0.1, fstop=11.0),
+    "dutch_tower":                  dict(az=30, el=12, lens=20, m=1.6, roll=10, fstop=11.0),
+    # --- Automotive & Vehicle ---
+    "vehicle_3q_low":               dict(az=48, el=6, lens=35, m=1.35, sy=0.05),
+    "car_front_3q_low_hero":        dict(az=38, el=4, lens=35, m=1.25, sy=0.05),
+    "car_rear_3q_low":              dict(az=142, el=5, lens=50, m=1.25, sy=0.04),
+    "car_aggressive_front_3q_wide": dict(az=48, el=2, lens=24, m=1.35, sy=0.06),
+    "car_side_profile_pure":        dict(az=90, el=1, lens=135, m=1.2),
+    "car_high_3q_beauty":           dict(az=40, el=28, lens=50, m=1.3, sx=-0.06),
+    "car_wheel_detail":             dict(az=62, el=6, lens=100, m=0.7, fstop=2.8),
+    "car_badge_macro":              dict(az=20, el=10, lens=100, m=0.62, sx=-0.05, fstop=2.0),
+    "car_low_wide_dramatic":        dict(az=30, el=-4, lens=20, m=1.4, sy=0.08),
+    "car_three_quarter_roll":       dict(az=36, el=8, lens=35, m=1.3, sy=0.05, roll=-8),
+    "car_nose_detail_low":          dict(az=15, el=-2, lens=85, m=0.8, sy=0.04, fstop=4.0),
+    "car_rear_quarter_panel":       dict(az=118, el=10, lens=85, m=0.85, fstop=4.0),
+    "car_front_centered_menace":    dict(az=0, el=3, lens=50, m=1.3, sy=0.04),
+    "car_roofline_high_rear_3q":    dict(az=150, el=32, lens=50, m=1.3),
+    # --- Key Art & Cinematic ---
+    "keyart_hero_wide_left":        dict(az=-38, el=6, lens=18, m=2.4, sx=0.14, sy=0.05),
+    "keyart_hero_wide_right":       dict(az=40, el=6, lens=18, m=2.4, sx=-0.14, sy=0.05),
+    "epic_low_ultrawide":           dict(az=22, el=-6, lens=16, m=1.9, sy=0.1),
+    "splash_centered_symmetry":     dict(az=0, el=3, lens=24, m=1.7, sy=0.08),
+    "diorama_birdseye":             dict(az=35, el=58, lens=40, m=1.8, fstop=2.2),
+    "turntable_beauty_3q":          dict(az=45, el=12, lens=85, m=1.2),
+    "weapon_loadout_profile":       dict(az=90, el=4, lens=100, m=1.15, sx=-0.1, fstop=2.8),
+    "concept_orthoish_front":       dict(az=2, el=2, lens=150, m=1.3),
+    "concept_orthoish_side":        dict(az=90, el=1, lens=150, m=1.3),
+    "rim_silhouette_back_3q":       dict(az=150, el=10, lens=50, m=1.5, sx=0.1),
+    "establishing_env_deep":        dict(az=46, el=8, lens=20, m=2.6, sx=0.12, sy=0.1, fstop=13.0),
+    # --- Wildlife & Macro Nature ---
+    "eye_line_ground_low":          dict(az=12, el=-4, lens=200, m=1.2, sy=0.03, fstop=4.0),
+    "animal_portrait_tele":         dict(az=22, el=2, lens=180, m=1.0, sx=-0.06, fstop=2.8),
+    "backlit_rim_silhouette":       dict(az=160, el=3, lens=135, m=1.45, sy=0.04),
+    "habitat_establishing":         dict(az=38, el=9, lens=24, m=2.6, sy=0.08, fstop=11.0),
+    "macro_extreme_detail":         dict(az=18, el=14, lens=100, m=0.62, sx=-0.05, fstop=5.6),
+    "top_down_botanical":           dict(az=0, el=80, lens=60, m=1.15, fstop=8.0),
+    "low_creature_hero_wide":       dict(az=28, el=-2, lens=28, m=1.4, sy=0.06),
+    "tele_isolation_3q":            dict(az=40, el=6, lens=150, m=1.15, sx=-0.07, fstop=3.2),
+    "profile_running_track":        dict(az=88, el=-1, lens=200, m=1.5, sx=0.1, fstop=4.0),
+    "dew_macro_dutch":              dict(az=25, el=8, lens=100, m=0.7, roll=10, fstop=4.0),
+    "underbelly_worm":              dict(az=15, el=-18, lens=24, m=1.3, sy=0.05),
+    "canopy_lookdown":              dict(az=35, el=48, lens=70, m=1.55, fstop=5.6),
+    "frontal_alert_tele":           dict(az=4, el=0, lens=200, m=1.25, fstop=3.5),
+    "golden_hour_environ_low":      dict(az=130, el=6, lens=50, m=1.9, sy=0.07, fstop=8.0),
 }
 
 def place_shot(target, shot, name=None, samples=256, resolution=(1920, 1080)):
@@ -354,7 +490,7 @@ def place_shot(target, shot, name=None, samples=256, resolution=(1920, 1080)):
     nm = name or ("Cam_" + (shot if isinstance(shot, str) else "custom"))
     cam = setup_hero_camera(target, name=nm, azimuth_deg=s["az"], elevation_deg=s["el"],
                             lens_mm=s["lens"], margin=s.get("m", 1.3),
-                            samples=samples, resolution=resolution)
+                            samples=samples, resolution=resolution, fstop=s.get("fstop"))
     cam.data.shift_x = s.get("sx", 0.0); cam.data.shift_y = s.get("sy", 0.0)
     if s.get("roll"):
         cam.matrix_world = cam.matrix_world @ Matrix.Rotation(math.radians(s["roll"]), 4, "Z")
@@ -363,8 +499,7 @@ def place_shot(target, shot, name=None, samples=256, resolution=(1920, 1080)):
 
 def render_contact_sheet(target, out_dir, shots=None, samples=40, res=(560, 360)):
     # Render several catalog shots small so you can LOOK and pick the best-composed one.
-    shots = shots or ["hero_3q", "hero_3q_low", "side", "hero_3q_high",
-                      "low_hero", "portrait_85", "birds_eye", "front"]
+    shots = shots or ["hero_3q", "low_hero", "hero_3q_high", "side", "portrait_85", "birds_eye", "establishing_wide", "front"]
     os.makedirs(out_dir, exist_ok=True); paths = []
     for sh in shots:
         place_shot(target, sh, samples=samples, resolution=res)
@@ -383,12 +518,14 @@ pass it as `target`, so the shot fits everything — then delete the helper.
 ## Gotchas
 - The catalog FITS the subject (FOV-based) so nothing is cut — but a fitted BAD ANGLE still looks
   bad. Always contact-sheet 3-5 and choose; don't trust one guess.
-- roll/dutch and macro crops are seasoning, not defaults.
+- roll/dutch, macro crops (m<1.0) and shallow DOF are seasoning, not defaults.
 - shift_x/shift_y are in sensor-height units; +-0.10 is a gentle thirds nudge.
+- fstop focuses the subject CENTRE. Shallow values blur the subject's own near/far edges (intended
+  for macro/portrait/product); don't put a shallow fstop on a whole building or vehicle.
 
 ## Validated result
-Built on setup_hero_camera (validated on 5.1.2); shift_x/shift_y + matrix roll are standard
-camera-data ops. confidence high."""),
+Built on setup_hero_camera (validated on 5.1.2); shift_x/shift_y + matrix roll + camera DOF
+(use_dof / focus_distance / aperture_fstop) are standard camera-data ops. confidence high."""),
 
     ("panel-lines-bmesh",
      "Breaking up any large flat/round panel so it doesn't read as a featureless primitive.",
@@ -423,16 +560,19 @@ def recessed_panel(obj, G, thickness_mult=0.3, depth_mult=-0.05):
 Standard 5.1 operator args. Pending in-scene render validation -> confidence medium."""),
 
     ("gen3d-import-and-place",
-     "Organic / detail-dense props (barrels, statues, creatures, plants, furniture) — AI-generate the mesh instead of hand-modelling.",
+     "MOST props (organic or hard-surface) — AI-generate the mesh as the default instead of hand-modelling.",
      "high",
      """# Generate & Import a 3D Asset (AI-generated mesh)
 
 ## When to use
-For a single ORGANIC or detail-dense prop with no good CC0: barrels, statues, busts,
-creatures, plants, furniture, characters, weapons, food, ornaments. Prefer this over
-hand-modelling such shapes (LLM hand-modelling is weak at them). For hard-surface
-vehicles/buildings/panels, hand-model/kitbash instead; for assets that already exist as
-CC0, download via `blendahbot.assets`. Image->3D from a downloaded reference photo is best.
+Your DEFAULT for MOST props — organic or hard-surface: barrels, statues, busts, creatures,
+plants, furniture, characters, weapons, food, ornaments, tools, crates, signage. Reach for it
+FIRST (LLM hand-modelling is weak at organic/detail-dense shapes, and gen3d gives a better base
+on most hard-surface too); the ~30-60s (sometimes up to ~10 min) is fine and expected, never a
+reason to fall back to a hand-rolled primitive. Hand-model/kitbash only when it genuinely wins —
+clean simple hard-surface or precise modular kits; download a CC0 asset when a good one already
+exists. Image->3D from ONE clean isolated reference photo on a plain background is best (a busy
+scene photo yields a cluttered mesh).
 
 ## Steps
 1. EASIEST — text->3D (NO reference image; the local server makes a clean image internally):
@@ -441,11 +581,30 @@ CC0, download via `blendahbot.assets`. Image->3D from a downloaded reference pho
    busy scene photo reconstructs the WHOLE scene into a cluttered mesh, so crop to the object:
    `python -m blendahbot.gen3d "wooden barrel" --image reference/barrel.png --out assets/barrel.glb`
    (prints the GLB path to stdout; needs the local Hunyuan3D server on :8081, or TRIPO_API_KEY).
-3. Import + place with the snippet below.
-4. gen3d returns a BAKED-TEXTURE GLB by default (2048² PBR painted onto the mesh) — the glTF
+3. PREVIEW & VET the mesh IN ISOLATION before importing — generation is unpredictable, so never
+   import blind. See "## Preview & vet before you place it" below; decide ACCEPT / REGENERATE /
+   FALL BACK.
+4. Import + place the ACCEPTED mesh with the snippet below.
+5. gen3d returns a BAKED-TEXTURE GLB by default (2048² PBR painted onto the mesh) — the glTF
    import builds the material automatically, so just light and frame it. ONLY if you passed
    --no-texture (a fast grey blockout) do you UV-unwrap and apply a PolyHaven PBR set
    (see pbr-material-from-polyhaven).
+
+## Compare two generators and pick the best (optional)
+When quality matters or the first mesh is weak, generate the SAME asset from two backends and
+choose the better one yourself — you can see them, so you are the judge:
+```
+python -m blendahbot.gen3d "wooden barrel" --image reference/barrel.png --compare hunyuan,trellis --out assets/barrel.glb
+```
+- It runs the backends SEQUENTIALLY (two big local models can't share the GPU) and prints a JSON
+  manifest to stdout: `{"candidates":[{"backend":"hunyuan","path":"assets/barrel.hunyuan.glb"}, ...]}`.
+- A backend that isn't running / has no key is simply omitted — use whatever candidates came back.
+  `trellis` is the local TRELLIS.2 server and is **image->3D only**, so pass `--image` when comparing
+  with it.
+- Then CHOOSE: import each candidate path into a temporary collection, render/screenshot each, compare
+  against the request and any reference photo (geometry correctness, texture quality, clean silhouette),
+  keep the best, and DELETE the losers' objects + files. Import the winner with the snippet below.
+- Don't compare for every prop — it doubles time and VRAM. Use it when it earns its cost.
 
 ## Prompting (text->3D) — this dominates quality
 The text prompt drives an internal text->image step, so write it like a clean product photo of
@@ -462,6 +621,109 @@ background, best quality" — keep it SHORT and front-loaded.
 For image->3D inputs: single isolated object, plain/neutral background, EVEN lighting (harsh
 shadows bake into the texture), >=1024px, a 3/4 angle for depth. Avoid glass/transparent and
 thin wires/hair (hard to reconstruct).
+
+## Preview & vet before you place it (DO THIS EVERY TIME)
+A generated mesh is unpredictable: wrong object, blobby/holed/melted geometry, a whole baked-in
+SCENE instead of one prop, garbled/seam-ripped texture, or wrong proportions. NEVER import one
+blind — look at it ALONE first, then ACCEPT / REGENERATE / FALL BACK.
+
+Easiest — let gen3d render the isolated contact sheet for you:
+```
+python -m blendahbot.gen3d "weathered oak barrel, iron hoops" --out assets/barrel.glb --preview <round_dir>/preview
+```
+It writes the GLB, then renders the mesh ALONE from several angles into `<round_dir>/preview/`
+(a throwaway Blender scene — your live scene is untouched) and prints the PNG paths. To preview a
+mesh you ALREADY have (a CC0 download, or a --compare candidate):
+`python -m blendahbot.gen3d.preview assets/barrel.glb --out <round_dir>/preview`.
+
+Then READ every `shot_*.png` and judge with this checklist — REJECT if any is true:
+- not clearly the requested object / unrecognizable
+- a whole baked-in scene (ground plane, multiple props, a room) instead of ONE object
+- holes, gaps, a missing back/side, melted/blobby forms, intersecting or exploded parts
+- garbled texture: smeared/seam-ripped UVs, wrong colours, baked-in shadows, or bare grey
+- clearly wrong proportions vs. the real object / references
+
+DECIDE:
+- ACCEPT  -> import it with the snippet below.
+- REGENERATE -> for an unlucky blob/holes/wrong-object, re-run with a NEW `--seed`; for a baked
+  scene / wrong proportions / missing feature, the PROMPT is the lever — rewrite it shorter,
+  single-object, material-first (or switch to image->3D from a clean cropped reference). Cap at
+  ~3 attempts.
+- FALL BACK after ~3 bad attempts (or for glass/thin-wire subjects gen3d handles poorly):
+  hand-model/kitbash, or download a CC0 GLB/PolyHaven .blend; or accept the best-of-N if serviceable.
+
+Want an INDEPENDENT judge to do this automatically? Add `--vet` (it renders the preview, has a
+separate critic score it, and auto-regenerates a bad asset, keeping the best):
+`python -m blendahbot.gen3d "..." --out assets/x.glb --vet`. It still prints the final GLB path to
+stdout; a `[gen3d] UNVETTED ...` line on stderr means even the best attempt was poor — then fall back.
+
+## Inline preview snippet (preview ANY glb within your own bpy flow)
+Renders a GLB alone in a TEMPORARY scene and tears it down, leaving the live scene byte-for-byte
+unchanged. KEY RULES (verified on 5.1.2): build via the bpy.data API (operators mutate the active
+scene); render the temp scene with `render(scene=preview.name)` (do NOT swap `window.scene`); on
+cleanup remove ONLY the datablocks you created — NEVER `bpy.data.orphans_purge()` (it deletes the
+user's pre-existing orphans and flips the active object).
+```python
+import bpy, math, os
+from mathutils import Vector
+
+def preview_glb_isolated(glb_path, out_dir, target=2.0, res=(480, 480),
+                         shots=(("front",0,12),("side",90,8),("back_3q",150,18),("high",40,38))):
+    os.makedirs(out_dir, exist_ok=True)
+    win = bpy.context.window
+    kinds = ("objects","meshes","materials","images","cameras","lights","collections","worlds")
+    snap = lambda: {k: set(d.name_full for d in getattr(bpy.data, k)) for k in kinds}
+    before = snap()
+    sc = bpy.data.scenes.new("BB_Preview"); w = bpy.data.worlds.new("BB_PreviewWorld")
+    w.use_nodes = True
+    bg = w.node_tree.nodes.get("Background")
+    if bg: bg.inputs[0].default_value = (0.18, 0.18, 0.19, 1.0)
+    sc.world = w; paths = []
+    try:
+        with bpy.context.temp_override(window=win, scene=sc, view_layer=sc.view_layers[0],
+                                       collection=sc.collection):
+            bpy.ops.import_scene.gltf(filepath=glb_path, import_scene_as_collection=False)
+        new = [bpy.data.objects[n] for n in (snap()["objects"] - before["objects"])]
+        meshes = [o for o in new if o.type == "MESH"]
+        if not meshes: raise RuntimeError("import produced no mesh")
+        bpy.context.view_layer.update()
+        cs = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
+        mn = Vector((min(c.x for c in cs), min(c.y for c in cs), min(c.z for c in cs)))
+        mx = Vector((max(c.x for c in cs), max(c.y for c in cs), max(c.z for c in cs)))
+        longest = max(mx - mn) or 1.0; center = (mn + mx) / 2
+        for o in meshes: o.location -= center; o.scale *= target / longest
+        bpy.context.view_layer.update()
+        cs = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
+        bcen = sum(cs, Vector()) / len(cs); radius = max((c - bcen).length for c in cs) or 1.0
+        cd = bpy.data.cameras.new("BB_PCam"); cam = bpy.data.objects.new("BB_PCam", cd)
+        sc.collection.objects.link(cam); sc.camera = cam
+        ld = bpy.data.lights.new("BB_PSun", "SUN"); ld.energy = 3.5
+        key = bpy.data.objects.new("BB_PSun", ld); sc.collection.objects.link(key)
+        key.rotation_euler = (math.radians(55), math.radians(15), math.radians(40))
+        pr = sc.render; pr.engine = "BLENDER_EEVEE"; pr.resolution_x, pr.resolution_y = res
+        pr.image_settings.file_format = "PNG"
+        hfov = 2*math.atan((cd.sensor_width/2)/cd.lens); vfov = 2*math.atan(math.tan(hfov/2)/(res[0]/res[1]))
+        dist = (radius*1.3)/math.sin(min(hfov, vfov)/2); cd.clip_end = dist*100
+        for label, az, el in shots:
+            a, e = math.radians(az), math.radians(el)
+            cam.location = bcen + Vector((dist*math.cos(e)*math.sin(a), -dist*math.cos(e)*math.cos(a), dist*math.sin(e)))
+            cam.rotation_euler = (bcen - cam.location).to_track_quat("-Z","Y").to_euler()
+            p = os.path.join(out_dir, "shot_%s.png" % label).replace("\\\\", "/")
+            pr.filepath = p; bpy.ops.render.render(write_still=True, scene=sc.name); paths.append(p)
+        return paths
+    finally:
+        after = snap()
+        if win is None or win.scene is not sc: bpy.data.scenes.remove(sc, do_unlink=True)
+        for k in ("objects","collections","meshes","cameras","lights","materials","images","worlds"):
+            coll = getattr(bpy.data, k)
+            for n in (after.get(k, set()) - before.get(k, set())):
+                d = coll.get(n)
+                if d is None: continue
+                try:
+                    if k == "objects" or d.users == 0: coll.remove(d)
+                except (ReferenceError, RuntimeError): pass
+# Then Read each shot_*.png and decide accept / regenerate / fall back.
+```
 
 ## bpy snippet
 ```python
@@ -567,9 +829,10 @@ bbox grounding math is standard; join is `bpy.ops.object.join`. confidence high.
      """# Varied Instances (no two trees the same)
 
 ## When to use
-Whenever you place MANY of something — trees, rocks, bushes, crowds, debris, houses. Make a
+Whenever you place MANY of something — trees, rocks, bushes, crowds, debris, houses. Generate a
 SMALL pool of unique variants once, then scatter cheap instances of the pool with per-instance
-variation. Identical copies read as fake; regenerating 100 meshes wastes hours of GPU.
+variation. This is about REALISM and art-control, not speed: identical copies read as fake and a
+uniform crowd can't be directed, so a curated unique pool beats 100 separate clones.
 
 ## Library + scatter (THE way to populate a scene)
 Build a pool of ~3-10 UNIQUE base meshes (generate via gen3d / download CC0 / model a few), then
