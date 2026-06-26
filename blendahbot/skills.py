@@ -265,6 +265,131 @@ def render_angle_candidates(target, out_dir, lens_mm=50.0, samples=48):
 ## Validated result
 Camera math + Cycles settings assign on Blender 5.1.2. PASS."""),
 
+    ("camera-framing-library",
+     "Choosing the camera shot for ANY subject — a catalog of named, exact framings to draw from.",
+     "high",
+     """# Camera Framing Library — pick a real shot, don't guess
+
+## When to use
+Framing ANY render — a single hero prop, a vehicle, a character, a building, or a whole
+environment. This is a permanent catalog of named, proven camera setups with EXACT
+angle/lens/framing/composition, so you PICK a shot instead of guessing numbers. Pairs with
+hero-camera-setup (the FOV-fit math) and the loop's render-candidates-and-choose.
+
+## How to use it
+1. From the subject table below, pick 3-5 candidate shots. Render them small with
+   `render_contact_sheet(target, out_dir, shots=[...])`, Read every `shot_*.png`, choose the
+   best-composed one.
+2. Re-render the winner at full samples/resolution with `place_shot(target, "<winner>")`.
+3. NEVER ship the default viewport camera or a dead-on axis-aligned shot.
+
+## What the numbers mean (framing knobs)
+- azimuth: 0=front, 90=right, 180=back, negative=left. A 3/4 (~30-45) shows TWO sides + depth.
+- elevation: +above / -below. LOW (0-10) = heroic/imposing for big subjects (ships, mechs,
+  buildings); 15-30 = tabletop props; ~8-12 = characters at eye line; 40-70 = layouts / plans /
+  making a subject look small; NEGATIVE = worm's-eye drama.
+- lens_mm: 24-35 = wide, dramatic, exaggerated scale + perspective (environments, hero-low);
+  50 = natural; 85-135 = compressed, flattering, ISOLATES the subject (portraits, product).
+- margin: framing tightness — 1.1 tight, 1.3 normal, 1.6 breathing room, 2.0+ establishing.
+  Below 1.0 crops INTO the subject for a detail shot.
+- shift_x/shift_y: rule-of-thirds nudge (puts the subject off-centre without re-aiming).
+- roll: dutch tilt (degrees) — tension/energy, use sparingly.
+
+## Subject -> shots to try (then contact-sheet and choose)
+| subject | candidates |
+|---|---|
+| product / prop (hero) | hero_3q, hero_3q_low, portrait_85, hero_3q_high, macro_detail |
+| vehicle (car/ship/mech) | vehicle_3q_low, side, low_hero, hero_3q_high, back_3q |
+| character / creature | char_full_3q, char_portrait, hero_3q_low, profile |
+| building / architecture | arch_2point, arch_hero_low, establishing_wide, centered_symmetry |
+| environment / scene | establishing_wide, birds_eye, low_hero, top_plan |
+| food / small goods | hero_3q_high, macro_detail, portrait_85 |
+| weapon / tool | side, hero_3q, macro_detail |
+| group / collection | establishing_wide, hero_3q_high, top_plan |
+
+## bpy: base FOV-fit camera (reused by the picker)
+""" + _FN_CAMERA + """
+## bpy: the shot catalog + picker
+```python
+import bpy, math, os
+from mathutils import Matrix
+
+# az=azimuth deg, el=elevation deg, lens=mm, m=framing margin, sx/sy=thirds shift, roll=dutch deg
+SHOTS = {
+    # --- beauty / product (single hero) ---
+    "hero_3q":            dict(az=35,  el=18, lens=50,  m=1.25, sx=-0.10, sy=0.04),
+    "hero_3q_left":       dict(az=-35, el=18, lens=50,  m=1.25, sx=0.10,  sy=0.04),
+    "hero_3q_low":        dict(az=35,  el=7,  lens=35,  m=1.30, sy=0.06),
+    "hero_3q_high":       dict(az=42,  el=38, lens=50,  m=1.30),
+    "portrait_85":        dict(az=25,  el=12, lens=85,  m=1.15, sx=-0.08),
+    "macro_detail":       dict(az=30,  el=16, lens=100, m=0.75),
+    # --- orthographic / technical (axis) ---
+    "front":              dict(az=0,   el=0,  lens=85,  m=1.40),
+    "side":               dict(az=90,  el=0,  lens=85,  m=1.40),
+    "profile":            dict(az=90,  el=8,  lens=85,  m=1.30),
+    "back":               dict(az=180, el=0,  lens=85,  m=1.40),
+    "back_3q":            dict(az=145, el=18, lens=50,  m=1.30),
+    "top_plan":           dict(az=0,   el=87, lens=50,  m=1.40),
+    # --- cinematic / dramatic ---
+    "low_hero":           dict(az=25,  el=5,  lens=28,  m=1.35, sy=0.05),
+    "worm_eye":           dict(az=20,  el=-8, lens=24,  m=1.30),
+    "birds_eye":          dict(az=30,  el=62, lens=35,  m=1.40),
+    "dutch_left":         dict(az=35,  el=16, lens=35,  m=1.30, roll=-12),
+    "dutch_right":        dict(az=-35, el=16, lens=35,  m=1.30, roll=12),
+    "establishing_wide":  dict(az=40,  el=12, lens=24,  m=2.20),
+    # --- composition variants ---
+    "thirds_left":        dict(az=35,  el=18, lens=50,  m=1.35, sx=0.12),
+    "thirds_right":       dict(az=-35, el=18, lens=50,  m=1.35, sx=-0.12),
+    "centered_symmetry":  dict(az=0,   el=6,  lens=50,  m=1.35),
+    # --- subject-specific conventions ---
+    "vehicle_3q_low":     dict(az=48,  el=6,  lens=35,  m=1.35, sy=0.05),
+    "char_full_3q":       dict(az=32,  el=8,  lens=50,  m=1.20),
+    "char_portrait":      dict(az=22,  el=10, lens=100, m=0.90, sx=-0.08),
+    "arch_2point":        dict(az=30,  el=4,  lens=28,  m=1.60, sy=0.10),
+    "arch_hero_low":      dict(az=25,  el=3,  lens=24,  m=1.70, sy=0.12),
+}
+
+def place_shot(target, shot, name=None, samples=256, resolution=(1920, 1080)):
+    s = SHOTS[shot] if isinstance(shot, str) else shot
+    nm = name or ("Cam_" + (shot if isinstance(shot, str) else "custom"))
+    cam = setup_hero_camera(target, name=nm, azimuth_deg=s["az"], elevation_deg=s["el"],
+                            lens_mm=s["lens"], margin=s.get("m", 1.3),
+                            samples=samples, resolution=resolution)
+    cam.data.shift_x = s.get("sx", 0.0); cam.data.shift_y = s.get("sy", 0.0)
+    if s.get("roll"):
+        cam.matrix_world = cam.matrix_world @ Matrix.Rotation(math.radians(s["roll"]), 4, "Z")
+    bpy.context.scene.camera = cam
+    return cam
+
+def render_contact_sheet(target, out_dir, shots=None, samples=40, res=(560, 360)):
+    # Render several catalog shots small so you can LOOK and pick the best-composed one.
+    shots = shots or ["hero_3q", "hero_3q_low", "side", "hero_3q_high",
+                      "low_hero", "portrait_85", "birds_eye", "front"]
+    os.makedirs(out_dir, exist_ok=True); paths = []
+    for sh in shots:
+        place_shot(target, sh, samples=samples, resolution=res)
+        p = os.path.join(out_dir, "shot_%s.png" % sh)
+        bpy.context.scene.render.filepath = p
+        bpy.ops.render.render(write_still=True); paths.append(p)
+    return paths
+# Then: Read each shot_*.png, pick the best-composed, and
+#   place_shot(target, "<winner>", samples=256, resolution=(1920, 1080)) for the final render.
+```
+
+## For a whole scene (multiple objects)
+Frame the WHOLE group: make a temporary Empty at the combined bounds (or briefly join a copy) and
+pass it as `target`, so the shot fits everything — then delete the helper.
+
+## Gotchas
+- The catalog FITS the subject (FOV-based) so nothing is cut — but a fitted BAD ANGLE still looks
+  bad. Always contact-sheet 3-5 and choose; don't trust one guess.
+- roll/dutch and macro crops are seasoning, not defaults.
+- shift_x/shift_y are in sensor-height units; +-0.10 is a gentle thirds nudge.
+
+## Validated result
+Built on setup_hero_camera (validated on 5.1.2); shift_x/shift_y + matrix roll are standard
+camera-data ops. confidence high."""),
+
     ("panel-lines-bmesh",
      "Breaking up any large flat/round panel so it doesn't read as a featureless primitive.",
      "medium",
