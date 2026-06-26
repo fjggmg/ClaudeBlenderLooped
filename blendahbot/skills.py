@@ -220,22 +220,46 @@ World node IDs/sockets assign on Blender 5.1.2; studio_small_09 URL verified liv
     ("hero-camera-setup",
      "Final framing of any single hero object — replaces the flat default camera.",
      "high",
-     f"""# Hero Camera + Cycles Render Settings
+     f"""# Hero Camera — choose a GOOD angle, don't guess one
 
 ## When to use
-Whenever you frame a single subject for the critic. Default/straight-on framing photographs detail badly.
+Final framing of a single hero subject. `setup_hero_camera` guarantees the whole object FITS
+(FOV-based), but a fitted-but-awkward angle still looks bad. You must CHOOSE the angle, not guess.
 
-## Steps
-1. Call setup_hero_camera(target) — auto-frames from the bounding sphere at a 3/4 elevated angle,
-   makes it active, sets Cycles + denoise.
-2. For elongated subjects (ships) keep elevation low (~15-20deg) to show the profile.
-3. Lens 50-85mm (longer = product-shot, less distortion).
+## How to get a good shot
+1. DON'T commit to one angle. Render several candidate angles small/fast with
+   `render_angle_candidates(target, out_dir)`, Read every `angle_*.png`, and pick the one that
+   reads best — then re-render THAT angle at full quality for the final.
+2. Composition: a 3/4 view (shows two sides + depth), never dead-on/axis-aligned. Elevation by
+   subject — LOW (~10-15deg) for big/heroic subjects (ships, buildings, mechs) so they feel
+   imposing; ~20-30deg for tabletop props; eye-level for characters. Lens 50-85mm.
+3. Rule of thirds: nudge the subject slightly off-centre (small camera shift) rather than dead-centre.
+4. Make sure the DEFINING features face the camera (a ship's profile + nacelles; a face's front).
 
 ## bpy snippet
 {_FN_CAMERA}
 
+```python
+import bpy, os
+def render_angle_candidates(target, out_dir, lens_mm=50.0, samples=48):
+    # Render the subject from several angles so you can LOOK and pick the best-composed one.
+    cands = [("front34", 35, 14), ("side", 90, 12), ("rear34", 145, 18), ("high34", 45, 40)]
+    paths = []
+    for label, az, el in cands:
+        setup_hero_camera(target, name="Cam_" + label, azimuth_deg=az, elevation_deg=el,
+                          lens_mm=lens_mm, samples=samples)
+        p = os.path.join(out_dir, "angle_%s.png" % label)
+        bpy.context.scene.render.filepath = p
+        bpy.ops.render.render(write_still=True)
+        paths.append(p)
+    return paths
+# Then: Read each angle_*.png, pick the best, call setup_hero_camera(target, azimuth_deg=...,
+# elevation_deg=...) for that winner and render the final at full samples.
+```
+
 ## Gotchas
-- 5.1 denoiser accepts 'OPTIX'/'OPENIMAGEDENOISE'; 'OPENIMAGEDENOISE_GPU' raises TypeError.
+- A fitted but badly-ANGLED shot still looks bad — always compare candidates and choose.
+- 5.1 denoiser: 'OPTIX' / 'OPENIMAGEDENOISE' (NOT 'OPENIMAGEDENOISE_GPU').
 - Update the depsgraph before reading bound_box.
 
 ## Validated result

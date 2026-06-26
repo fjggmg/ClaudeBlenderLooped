@@ -119,8 +119,13 @@ Surface on coarse primitives melted edges into blobs, (b) hand-rolled procedural
 8. HDRI WORLD ALWAYS (metals look dead-gray with nothing to reflect): load a PolyHaven HDRI
    as an Environment Texture in the World nodes; add a key area light ~45° + a RIM/back light
    grazing the hull (the rim catches every bevel highlight and panel-groove shadow).
-9. HERO CAMERA + CYCLES: 3/4 angle, low elevation (~15-20° for ships), 50-85mm lens, framed
-   so the silhouette reads. Render in CYCLES with denoising. Ground the object on a floor plane.
+9. HERO CAMERA + CYCLES — DON'T guess one angle. Render 3-4 candidate angles (front-3/4, side,
+   rear-3/4, high) with the hero-camera skill's `render_angle_candidates`, LOOK at all of them,
+   and pick the best-composed for the final: a 3/4 view (not dead-on), low elevation (~10-15°
+   for big/heroic subjects), defining features facing the camera, subject slightly off-centre
+   (rule of thirds), 50-85mm. A bad angle ruins a good model — the framing fits the whole
+   object (FOV-based) but YOU choose the composition. Render the winner in CYCLES with denoising;
+   ground the subject on a floor plane.
 
 FAIL CONDITIONS the critic flags: smooth subdivided blob; bare primitive shipped; flat
 panel lines with no shadow; perfect symmetry / no asymmetric detail; uniform "noise" greebles;
